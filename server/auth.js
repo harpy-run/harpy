@@ -102,7 +102,8 @@ export function setup(username, password) {
 
 function grant(payload, username, role) {
   return {
-    token: sign(payload, state.secret, TOKEN_TTL),
+    // iat lets a later password change invalidate tokens minted before it.
+    token: sign({ ...payload, iat: Date.now() }, state.secret, TOKEN_TTL),
     username,
     role,
     expiresIn: TOKEN_TTL
@@ -133,10 +134,13 @@ export function verifyToken(token) {
 export function resolvePrincipal(payload) {
   if (!payload) return null
   if (payload.role === 'owner' || payload.sub === OWNER_ID) {
-    return state?.username ? { sub: OWNER_ID, username: state.username, role: 'admin' } : null
+    if (!state?.username) return null
+    if (payload.iat && state.pwChangedAt && payload.iat < state.pwChangedAt) return null
+    return { sub: OWNER_ID, username: state.username, role: 'admin' }
   }
   const user = findUser(payload.sub) || findUser(payload.username)
   if (!user || user.disabled) return null
+  if (payload.iat && user.pwChangedAt && payload.iat < user.pwChangedAt) return null
   return { sub: user.id, username: user.username, role: user.role }
 }
 
@@ -244,6 +248,9 @@ export function updateUser(id, patch = {}) {
   if (patch.password) {
     if (String(patch.password).length < 6) throw httpError(400, 'password too short')
     user.passwordHash = hashPassword(patch.password)
+    // A password reset must not leave old tokens alive — the member's
+    // existing sessions die at the next resolvePrincipal check.
+    user.pwChangedAt = Date.now()
   }
   if (patch.role !== undefined) {
     if (!['admin', 'member'].includes(patch.role)) throw httpError(400, 'role must be admin or member')
@@ -273,9 +280,31 @@ function countAdmins() {
   return 1 + (state?.users || []).filter((user) => user.role === 'admin' && !user.disabled).length
 }
 
+// Self-service password change for any signed-in account (owner included —
+// the owner previously had no path to rotate their password). Stamps
+// pwChangedAt so JWTs minted before the change stop resolving.
+export function changePassword(principal, current, next) {
+  if (setupRequired()) throw httpError(428, 'setup required')
+  if (String(next || '').length < 6) throw httpError(400, 'password too short')
+  if (principal?.sub === OWNER_ID || principal?.role === 'owner') {
+    if (!checkHash(current, state.passwordHash)) throw httpError(401, 'invalid credentials')
+    state.passwordHash = hashPassword(next)
+    state.pwChangedAt = Date.now()
+    persist()
+    return { ok: true }
+  }
+  const user = findUser(principal?.sub) || findUser(principal?.username)
+  if (!user) throw httpError(404, 'user not found')
+  if (!checkHash(current, user.passwordHash)) throw httpError(401, 'invalid credentials')
+  user.passwordHash = hashPassword(next)
+  user.pwChangedAt = Date.now()
+  persist()
+  return { ok: true }
+}
+
 export function issueApiKey(name) {
   if (setupRequired()) throw httpError(428, 'setup required')
-  const key = `px_${crypto.randomBytes(24).toString('base64url')}`
+  const key = `hp_${crypto.randomBytes(24).toString('base64url')}`
   const record = {
     id: crypto.randomUUID(),
     name: String(name || 'default').slice(0, 64),
@@ -314,23 +343,62 @@ export function checkApiKey(key) {
 export function authMiddleware(req) {
   const authorization = req.headers.authorization || ''
   const bearer = authorization.startsWith('Bearer ') ? authorization.slice(7) : ''
-  if (bearer?.startsWith('px_')) return checkApiKey(bearer) ? { sub: OWNER_ID, role: 'admin' } : null
+  if (bearer?.startsWith('hp_')) return checkApiKey(bearer) ? { sub: OWNER_ID, role: 'admin' } : null
   if (bearer) return resolvePrincipal(verifyToken(bearer))
   const apiKey = req.headers['x-api-key']
   return apiKey && checkApiKey(apiKey) ? { sub: OWNER_ID, role: 'admin' } : null
 }
 
 export function authRoutes(router) {
-  router.get('/api/health', () => ({ ok: true, name: 'pixcode', version: VERSION, setupRequired: setupRequired() }), { auth: false })
-  router.post('/api/auth/setup', async (req) => {
+  router.get('/api/health', () => ({ ok: true, name: 'harpy', version: VERSION, setupRequired: setupRequired() }), { auth: false })
+
+  // Brute-force throttle for the unauthenticated credential endpoints —
+  // the daemon binds 0.0.0.0, so a public deployment would otherwise accept
+  // unlimited password guesses. Per-IP, in-memory, escalating lockout.
+  const attempts = new Map()
+  const throttleKey = (req) => req.socket?.remoteAddress || 'unknown'
+  const throttleCheck = (key) => {
+    const rec = attempts.get(key)
+    if (rec && rec.until > Date.now()) throw httpError(429, 'too many attempts — wait and retry')
+  }
+  const throttleFail = (key) => {
+    const rec = attempts.get(key) || { fails: 0, until: 0 }
+    rec.fails += 1
+    rec.until = Date.now() + Math.min(30_000, 500 * 2 ** rec.fails)
+    attempts.set(key, rec)
+    if (attempts.size > 2048) {
+      const now = Date.now()
+      for (const [k, v] of attempts) if (v.until <= now) attempts.delete(k)
+    }
+  }
+  const guarded = (fn) => async (req) => {
+    const key = throttleKey(req)
+    throttleCheck(key)
+    try {
+      const result = await fn(req)
+      attempts.delete(key)
+      return result
+    } catch (error) {
+      throttleFail(key)
+      throw error
+    }
+  }
+
+  router.post('/api/auth/setup', guarded(async (req) => {
     const body = await readBody(req)
     return setup(body.username || 'admin', body.password)
-  }, { auth: false })
-  router.post('/api/auth/login', async (req) => {
+  }), { auth: false })
+  router.post('/api/auth/login', guarded(async (req) => {
     const body = await readBody(req)
     return login(body.username, body.password)
-  }, { auth: false })
+  }), { auth: false })
   router.get('/api/auth/me', (req) => ({ principal: req.principal }))
+  // Throttled like login: verifying the current password is itself a
+  // brute-force surface on the owner credential.
+  router.post('/api/auth/password', guarded(async (req) => {
+    const body = await readBody(req, 8_000)
+    return changePassword(req.principal, body.current, body.next)
+  }))
   router.post('/api/auth/keys', async (req) => {
     requireAdmin({ principal: req.principal })
     return issueApiKey((await readBody(req)).name)

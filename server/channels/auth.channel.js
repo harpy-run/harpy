@@ -1,8 +1,9 @@
-import { createUser, issueApiKey, listApiKeys, listUsers, removeUser, requireAdmin, revokeApiKey, updateUser } from '../auth.js'
+import { changePassword, createUser, issueApiKey, listApiKeys, listUsers, removeUser, requireAccess, requireAdmin, revokeApiKey, updateUser } from '../auth.js'
 
 export const authChannel = {
   ops: {
     me: (ctx) => ({ principal: ctx.principal }),
+    changePassword: (ctx, { current, next } = {}) => { requireAccess(ctx); return changePassword(ctx.principal, current, next) },
     keys: (ctx) => { requireAdmin(ctx); return listApiKeys() },
     issueKey: (ctx, { name } = {}) => { requireAdmin(ctx); return issueApiKey(name) },
     revokeKey: (ctx, { id } = {}) => { requireAdmin(ctx); return { revoked: revokeApiKey(id) } },

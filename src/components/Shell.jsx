@@ -327,6 +327,10 @@ function SettingsView() {
           </div>
         </div>
       </vscode-collapsible>
+      <vscode-collapsible class="settings-section" heading={t('security.title')} open>
+        <p class="settings-section-hint">{t('security.hint')}</p>
+        <PasswordCard />
+      </vscode-collapsible>
       <vscode-collapsible class="settings-section" heading={t('settings.notifications')} open>
         <p class="settings-section-hint">{t('settings.notificationsHint')}</p>
         <div class="settings-card">
@@ -369,6 +373,41 @@ function SettingsView() {
         </vscode-collapsible>
       )}
     </vscode-scrollable>
+  </div>
+}
+
+// Self-service password change. The server stamps pwChangedAt so every token
+// minted before the change — including this session's — stops resolving;
+// hence the forced sign-out on success.
+function PasswordCard() {
+  const [current, setCurrent] = useState('')
+  const [next, setNext] = useState('')
+  const [status, setStatus] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  async function save() {
+    setBusy(true)
+    setStatus('')
+    try {
+      await ws.request('auth', 'changePassword', { current, next })
+      setStatus(t('security.changed'))
+      setTimeout(() => { ws.close(); setToken(''); location.reload() }, 1200)
+    } catch (requestError) {
+      setStatus(requestError.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return <div class="settings-card">
+    <div class="git-account-fields">
+      <TField type="password" value={current} onInput={(event) => setCurrent(event.currentTarget.value)} placeholder={t('security.currentPassword')} aria-label={t('security.currentPassword')} />
+      <TField type="password" value={next} onInput={(event) => setNext(event.currentTarget.value)} placeholder={t('security.newPassword')} aria-label={t('security.newPassword')} minlength={6} />
+    </div>
+    <div class="git-account-footer">
+      {status && <span class={status === t('security.changed') ? 'muted' : 'error-text'}>{status}</span>}
+      <vscode-button onClick={save} disabled={busy || !current || next.length < 6}><Save size={13} /> {t('security.change')}</vscode-button>
+    </div>
   </div>
 }
 
