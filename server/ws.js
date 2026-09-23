@@ -14,12 +14,8 @@ export function createHub(server) {
   // The editor accepts files up to 5 MiB, so saves must fit inside one frame.
   // 8 MiB leaves headroom while still stopping the 100 MiB default's abuse.
   const wss = new WebSocketServer({ noServer: true, maxPayload: 8 * 1024 * 1024 })
-  // ws requires the upgrade response to select one of the offered
-  // subprotocols — the credential slot itself is never echoed back.
-  wss.on('headers', (headers, req) => {
-    const offered = String(req.headers['sec-websocket-protocol'] || '').split(',').map((s) => s.trim())
-    if (offered.includes('harpy')) headers.push('Sec-WebSocket-Protocol: harpy')
-  })
+  // ws auto-selects the first offered subprotocol ('harpy' is our marker);
+  // the credential slot that follows it is never echoed back.
 
   const heartbeat = setInterval(() => {
     for (const ws of connections) {
