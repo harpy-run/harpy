@@ -5,7 +5,10 @@ export function httpError(status, message) {
 }
 
 export function sendJson(res, status, data) {
-  if (res.writableEnded) return
+  // headersSent guards streaming handlers (e.g. /api/preview/static) that
+  // already wrote a 200 + started piping — a late sendJson would otherwise
+  // throw ERR_HTTP_HEADERS_SENT and crash the process.
+  if (res.writableEnded || res.headersSent) return
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
     'cache-control': 'no-store',
