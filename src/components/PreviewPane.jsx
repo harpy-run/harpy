@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { Globe2, Maximize2, RefreshCw, X } from '../lib/icons.jsx'
-import { api, desktopRuntime, getToken, resolveApiUrl } from '../lib/api.js'
+import { api, desktopRuntime, resolveApiUrl } from '../lib/api.js'
 import { t } from '../lib/i18n.js'
 import { TInput } from './Fields.jsx'
 import { workspace } from '../state/app.js'
@@ -14,7 +14,7 @@ const DEVICES = [
 ]
 
 function targetUrl(target) {
-  // The dev server lives on the Pixcode host; the iframe reaches it through
+  // The dev server lives on the Harpy host; the iframe reaches it through
   // the same hostname the browser used for this UI.
   const host = desktopRuntime ? '127.0.0.1' : location.hostname
   return `http://${host}:${target.port}/`
@@ -48,9 +48,9 @@ export function PreviewPane() {
     scan()
     const interval = setInterval(scan, 5_000)
     const reconnect = () => scan()
-    window.addEventListener('pixcode:ws-open', reconnect)
-    window.addEventListener('pixcode:workspace-change', scan)
-    return () => { clearInterval(interval); window.removeEventListener('pixcode:ws-open', reconnect); window.removeEventListener('pixcode:workspace-change', scan) }
+    window.addEventListener('harpy:ws-open', reconnect)
+    window.addEventListener('harpy:workspace-change', scan)
+    return () => { clearInterval(interval); window.removeEventListener('harpy:ws-open', reconnect); window.removeEventListener('harpy:workspace-change', scan) }
   }, [])
 
   const active = targets.find((item) => String(item.port) === selected)
@@ -59,8 +59,27 @@ export function PreviewPane() {
     if (active && selected !== String(active.port)) setSelected(String(active.port))
   }, [targets])
 
+  // Static previews are served to an iframe, which cannot send Authorization
+  // — the server issues a 60s ticket bound to (principal, workspace, path)
+  // instead of putting the session JWT in the URL. Debounced so typing in
+  // the path field does not mint a ticket per keystroke.
+  const [staticSrc, setStaticSrc] = useState('')
+  useEffect(() => {
+    if (mode !== 'static') { setStaticSrc(''); return undefined }
+    let cancelled = false
+    const timer = setTimeout(async () => {
+      const w = workspace.value?.path || ''
+      const p = staticPath || 'index.html'
+      try {
+        const { ticket } = await api.post('/api/preview/ticket', { w, p })
+        if (!cancelled) setStaticSrc(`${resolveApiUrl('/api/preview/static')}?w=${encodeURIComponent(w)}&p=${encodeURIComponent(p)}&ptok=${encodeURIComponent(ticket)}`)
+      } catch { if (!cancelled) setStaticSrc('') }
+    }, 350)
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [mode, staticPath, workspace.value?.path, frameKey])
+
   const src = mode === 'static'
-    ? `${resolveApiUrl('/api/preview/static')}?w=${encodeURIComponent(workspace.value?.path || '')}&p=${encodeURIComponent(staticPath || 'index.html')}&token=${encodeURIComponent(getToken())}`
+    ? staticSrc
     : (active ? targetUrl(active) : '')
 
   return <div class="preview-pane">
@@ -88,7 +107,7 @@ export function PreviewPane() {
     <div class="preview-stage">
       {src ? (
         <div class={`preview-frame preview-${device}`} style={DEVICES.find((item) => item.id === device)?.width ? { '--device-width': `${DEVICES.find((item) => item.id === device).width}px` } : {}}>
-          <iframe key={frameKey + src} src={src} title={t('preview.title')} sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups" />
+          <iframe key={frameKey + src} src={src} title={t('preview.title')} sandbox="allow-scripts allow-forms allow-modals allow-popups" />
         </div>
       ) : (
         <div class="preview-empty">

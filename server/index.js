@@ -15,7 +15,7 @@ import { agentChannel } from './channels/agent.channel.js'
 import { authChannel } from './channels/auth.channel.js'
 import { registerAllAdapters } from './agents/adapters/index.js'
 import { listAgents } from './agents/adapter.js'
-import { restoreSessions, setPresenceNotifier } from './agents/runner.js'
+import { restoreSessions, setPresenceNotifier, setSessionEndHook } from './agents/runner.js'
 import { initializeWorkspace } from './projects.js'
 import { projectChannel } from './channels/project.channel.js'
 import { activityChannel } from './channels/activity.channel.js'
@@ -24,6 +24,9 @@ import { systemChannel } from './channels/system.channel.js'
 import { shareResume, shareRoutes, shareSupervise } from './share.js'
 import { previewRoutes } from './preview.js'
 import { oauthRoutes } from './git-oauth.js'
+import { automationChannel } from './channels/automation.channel.js'
+import { automationRoutes, onFsChanged, sessionEnded, setAutomationNotifier, startScheduler } from './automations.js'
+import { registerFsListener } from './channels/fs.channel.js'
 
 function allowLocalOrigin(origin) {
   if (!origin) return false
@@ -56,6 +59,7 @@ export function createHttpServer() {
   previewRoutes(router)
   oauthRoutes(router)
   shareRoutes(router)
+  automationRoutes(router)
   const distExists = fs.existsSync(config.distDir)
   const server = http.createServer(async (req, res) => {
     const localOrigin = setCors(req, res)
@@ -71,7 +75,7 @@ export function createHttpServer() {
       } catch (error) {
         // A throwing verifier or a router-level bug must never leave the
         // request hanging — answer 500 instead of stalling the client.
-        console.error(`[api] ${req.url}: ${error?.message || error}`)
+        console.error(`[api] ${String(req.url || '').split('?')[0]}: ${error?.message || error}`)
         if (!res.writableEnded) sendJson(res, 500, { error: 'internal error' })
         return
       }
@@ -96,6 +100,13 @@ export function createHttpServer() {
   hub.register('activity', activityChannel)
   hub.register('share', shareChannel)
   hub.register('system', systemChannel)
+  hub.register('automation', automationChannel)
+  // Automation engine: fs watcher flushes, the cron tick, and the runner's
+  // session-end hook feed trigger → gate → spawn. All idle work is local.
+  registerFsListener(onFsChanged)
+  setSessionEndHook(sessionEnded)
+  setAutomationNotifier(() => hub.broadcast('automation', 'changed', {}))
+  startScheduler()
   // Agent session lifecycle changes are broadcast so every client can refresh
   // its "who else is working" presence strip.
   setPresenceNotifier(() => hub.broadcast('agent', 'presence', {}))
@@ -125,13 +136,13 @@ export function startServer(options = {}) {
   // A desktop install can coexist with an older daemon or another local
   // service. Keep the normal CLI port stable, but let the bundled companion
   // move to the next free port instead of exiting before the UI can connect.
-  const allowPortFallback = process.env.PIXCODE_DESKTOP === '1'
+  const allowPortFallback = process.env.HARPY_DESKTOP === '1'
   const lastPort = Math.min(port + 20, 65535)
   let activePort = port
   const listen = () => {
     const onListening = () => {
       const displayHost = host === '0.0.0.0' ? 'localhost' : host
-      console.log(`pixcode v${VERSION} listening on http://${displayHost}:${activePort}`)
+      console.log(`harpy v${VERSION} listening on http://${displayHost}:${activePort}`)
       shareResume({ port: activePort })
       shareSupervise({ port: activePort })
     }
@@ -147,7 +158,7 @@ export function startServer(options = {}) {
       const detail = error?.code === 'EADDRINUSE'
         ? `port ${activePort} is already in use`
         : (error?.message || 'server failed to start')
-      console.error(`pixcode could not start: ${detail}`)
+      console.error(`harpy could not start: ${detail}`)
       process.exitCode = 1
     }
     server.once('error', onError)

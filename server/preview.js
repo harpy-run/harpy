@@ -1,12 +1,12 @@
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { config } from './config.js'
-import { sendJson } from './util/http.js'
+import { httpError, readBody, sendJson } from './util/http.js'
 import { workspacePath } from './workspace.js'
-import { resolvePrincipal, verifyToken } from './auth.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -40,16 +40,16 @@ async function listeningPorts() {
   return ports
 }
 
-// Other Pixcode instances on this machine answer /api/health with a marker
+// Other Harpy instances on this machine answer /api/health with a marker
 // body — filtering them keeps the workbench out of its own target list.
-function isPixcodeServer(port) {
+function isHarpyServer(port) {
   return new Promise((resolve) => {
     const req = http.get({ host: '127.0.0.1', port, path: '/api/health', timeout: 600 }, (res) => {
       let body = ''
       res.setEncoding('utf8')
       res.on('data', (chunk) => { body += chunk; if (body.length > 2048) req.destroy() })
       res.on('end', () => {
-        try { resolve(JSON.parse(body)?.name === 'pixcode') } catch { resolve(false) }
+        try { resolve(JSON.parse(body)?.name === 'harpy') } catch { resolve(false) }
       })
       res.on('error', () => resolve(false))
     })
@@ -86,7 +86,7 @@ let targetsCache = { ts: 0, targets: [] }
 export async function previewTargets() {
   if (Date.now() - targetsCache.ts < 3_000) return targetsCache.targets
   const ports = await listeningPorts()
-  const found = (await Promise.all([...ports].map(async (port) => (await isPixcodeServer(port)) ? null : probe(port)))).filter(Boolean)
+  const found = (await Promise.all([...ports].map(async (port) => (await isHarpyServer(port)) ? null : probe(port)))).filter(Boolean)
   targetsCache = { ts: Date.now(), targets: found.sort((a, b) => a.port - b.port) }
   return found
 }
@@ -103,17 +103,52 @@ const MIME = {
   '.mp4': 'video/mp4', '.webm': 'video/webm', '.mp3': 'audio/mpeg'
 }
 
+// ─── static preview tickets ──────────────────────────────────────────────
+// The preview iframe cannot send Authorization, so something has to travel
+// in the URL — but a bearer JWT there leaks via history, logs, screenshots,
+// and the framed page itself reading location.href. Instead the UI mints a
+// short-lived ticket bound to (principal, workspace, path): a leaked ticket
+// re-reads that one file for a minute and authenticates nothing else.
+const PREVIEW_TICKET_TTL_MS = 60_000
+const previewTickets = new Map()
+
+function issueTicket(principal, w, p) {
+  const now = Date.now()
+  for (const [key, entry] of previewTickets) if (entry.exp < now) previewTickets.delete(key)
+  const ticket = crypto.randomBytes(24).toString('base64url')
+  previewTickets.set(ticket, {
+    exp: now + PREVIEW_TICKET_TTL_MS,
+    principal,
+    w: String(w || ''),
+    p: String(p || 'index.html')
+  })
+  return { ticket, expiresIn: Math.floor(PREVIEW_TICKET_TTL_MS / 1000) }
+}
+
+function redeemTicket(ticket, w, p) {
+  const entry = previewTickets.get(String(ticket || ''))
+  if (!entry || entry.exp < Date.now()) return null
+  if (entry.w !== String(w || '') || entry.p !== String(p || 'index.html')) return null
+  return entry.principal
+}
+
 // Static preview: serve a workspace file (or its folder's index.html) over
 // HTTP so plain HTML/CSS/JS previews instantly with no dev server at all.
 function serveStaticFile(req, res) {
-  const token = req.query.get('token') || ''
-  const principal = resolvePrincipal(verifyToken(token))
+  const w = req.query.get('w') || ''
+  const file = req.query.get('p') || 'index.html'
+  const principal = redeemTicket(req.query.get('ptok'), w, file)
   if (!principal) { sendJson(res, 401, { error: 'unauthorized' }); return }
   let resolved
   try {
-    const file = req.query.get('p') || 'index.html'
-    resolved = workspacePath(req.query.get('w') || '', file, { principal }).resolved
+    const { base, resolved: lexical } = workspacePath(w, file, { principal })
+    resolved = lexical
     if (fs.statSync(resolved).isDirectory()) resolved = path.join(resolved, 'index.html')
+    // A symlink inside the workspace must not hand out files outside it —
+    // compare realpaths, not just the lexical resolve.
+    const realBase = fs.realpathSync(base)
+    resolved = fs.realpathSync(resolved)
+    if (resolved !== realBase && !resolved.startsWith(`${realBase}${path.sep}`)) throw httpError(403, 'path outside workspace')
   } catch (error) {
     sendJson(res, error.status || 404, { error: error.status ? error.message : 'not found' })
     return
@@ -124,7 +159,16 @@ function serveStaticFile(req, res) {
     // Previews are source files — cap them so a giant artifact cannot stall
     // the event loop, and stream rather than buffering the whole file.
     if (!stat.isFile() || stat.size > 50 * 1024 * 1024) { sendJson(res, 404, { error: 'not found' }); return }
-    res.writeHead(200, { 'content-type': type, 'cache-control': 'no-store', 'content-length': stat.size })
+    res.writeHead(200, {
+      'content-type': type,
+      'cache-control': 'no-store',
+      'content-length': stat.size,
+      'x-content-type-options': 'nosniff',
+      // Previewed files are untrusted workspace content: sandbox forces an
+      // opaque origin so the framed page cannot reach the parent
+      // (localStorage, WS, DOM) even though it is served same-origin.
+      'content-security-policy': "sandbox allow-scripts allow-forms; frame-ancestors 'self'"
+    })
     fs.createReadStream(resolved).on('error', () => { if (!res.writableEnded) res.end() }).pipe(res)
   } catch {
     sendJson(res, 404, { error: 'not found' })
@@ -133,7 +177,11 @@ function serveStaticFile(req, res) {
 
 export function previewRoutes(router) {
   router.get('/api/preview/targets', async () => ({ targets: await previewTargets() }))
-  // Iframes cannot send Authorization headers; the token travels as a query
-  // param instead — same pattern the /ws endpoint already uses.
+  router.post('/api/preview/ticket', async (req) => {
+    const body = await readBody(req, 8_000)
+    return issueTicket(req.principal, body.w, body.p)
+  })
+  // Iframes cannot send Authorization headers; a single scoped ticket
+  // travels as a query param instead of a bearer token.
   router.get('/api/preview/static', (req, res) => serveStaticFile(req, res), { auth: false })
 }
