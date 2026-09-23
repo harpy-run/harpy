@@ -1,7 +1,7 @@
 /**
  * Public-link ("share") providers — expose the daemon on a public HTTPS URL.
  *
- * State lives in $PIXCODE_HOME/share.json. The tunnel process is spawned
+ * State lives in $HARPY_HOME/share.json. The tunnel process is spawned
  * detached so it survives daemon restarts; the pid in the state file is the
  * single source of truth for "is it running".
  */
@@ -61,6 +61,26 @@ function download(url, dest) {
     });
 }
 
+// Provider binaries are fetched from `latest` URLs, which have no stable
+// upstream checksum to pin — so we pin ourselves: the first download records
+// a sha256 next to the binary and every later invocation must match. A
+// tampered or corrupted file under $HARPY_HOME/bin can no longer run
+// silently; delete it to re-download.
+function hashFile(file) {
+    return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+}
+function verifyPinned(name, dest) {
+    const pinFile = `${dest}.sha256`;
+    const actual = hashFile(dest);
+    let pinned = null;
+    try { pinned = fs.readFileSync(pinFile, 'utf8').trim(); } catch { void 0; }
+    if (pinned) {
+        if (pinned !== actual) throw new Error(`${name} failed its integrity check — remove ${dest} and retry`);
+        return;
+    }
+    fs.writeFileSync(pinFile, `${actual}\n`, { mode: 0o600 });
+}
+
 async function ensureBinary(name, url) {
     const dest = path.join(binDir(), name + exeExt);
     if (!fs.existsSync(dest)) {
@@ -69,6 +89,7 @@ async function ensureBinary(name, url) {
         await download(url, dest);
         fs.chmodSync(dest, 0o755);
     }
+    verifyPinned(name, dest);
     return dest;
 }
 
@@ -83,6 +104,7 @@ async function ensureBinaryTgz(name, url, member) {
         fs.rmSync(tgz, { force: true });
         fs.chmodSync(dest, 0o755);
     }
+    verifyPinned(name, dest);
     return dest;
 }
 
@@ -178,10 +200,16 @@ const PROVIDERS = {
             { key: 'name', label: 'Subdomain', placeholder: 'empty = px-<key hash>' },
         ],
         async build(opts, { port }) {
-            if (!opts.host) throw new Error('sish requires a relay host');
+            const host = String(opts.host || '');
+            // ssh treats leading-dash values as options — validate host and
+            // domain as real hostnames so a crafted opt cannot inject -o.
+            if (!/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/i.test(host)) throw new Error('sish requires a valid relay host');
+            const sshPort = Number(opts.port || 2222);
+            if (!Number.isInteger(sshPort) || sshPort < 1 || sshPort > 65535) throw new Error('invalid ssh port');
             const key = ensureKey();
             const name = (opts.name || `px-${keyFingerprint()}`).toLowerCase().replace(/[^a-z0-9-]/g, '');
-            const domain = opts.domain || opts.host;
+            const domain = String(opts.domain || host);
+            if (!/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/i.test(domain)) throw new Error('invalid public domain');
             return {
                 cmd: 'ssh',
                 args: [
@@ -189,9 +217,9 @@ const PROVIDERS = {
                     '-o', 'StrictHostKeyChecking=accept-new',
                     '-o', 'ServerAliveInterval=30',
                     '-o', 'ExitOnForwardFailure=yes',
-                    '-i', key, '-p', String(opts.port || 2222),
+                    '-i', key, '-p', String(sshPort),
                     '-R', `${name}:80:127.0.0.1:${port}`,
-                    opts.host,
+                    host,
                 ],
                 url: `https://${name}.${domain}`,
             };
@@ -211,7 +239,11 @@ const PROVIDERS = {
             const bin = await ensureBinaryTgz('ngrok',
                 `https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-${plat}-${arch}.tgz`, 'ngrok');
             const args = ['http', String(port), '--authtoken', opts.authtoken, '--log=stdout', '--log-format=json'];
-            if (opts.domain) args.push(`--url=https://${opts.domain}`);
+            if (opts.domain) {
+                const domain = String(opts.domain);
+                if (!/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/i.test(domain)) throw new Error('invalid dev domain');
+                args.push(`--url=https://${domain}`);
+            }
             return { cmd: bin, args, urlRe: /"url":\s*"(https:\/\/[^"]+)"/ };
         },
     },
@@ -420,11 +452,11 @@ export function shareProbe() {
     return new Promise((resolve) => {
         const req = https.get(`${st.url}/api/health`, {
             timeout: 8000,
-            headers: { 'ngrok-skip-browser-warning': '1', 'user-agent': 'pixcode-share-probe' },
+            headers: { 'ngrok-skip-browser-warning': '1', 'user-agent': 'harpy-share-probe' },
         }, (res) => {
             let body = '';
             res.on('data', (d) => { body += d; if (body.length > 4096) req.destroy(); });
-            res.on('end', () => resolve({ healthy: res.statusCode === 200 && body.includes('"pixcode"'), http: res.statusCode }));
+            res.on('end', () => resolve({ healthy: res.statusCode === 200 && body.includes('"harpy"'), http: res.statusCode }));
         });
         req.on('timeout', () => { req.destroy(); resolve({ healthy: false, reason: 'timeout' }); });
         req.on('error', (e) => resolve({ healthy: false, reason: e.code || e.message }));
@@ -434,7 +466,7 @@ export function shareProbe() {
 /* ---------------- bore.dk sign-in ----------------
  * `bore login` opens the auth URL through the OS browser — useless on a
  * headless daemon. We shadow `xdg-open`/`open`/`$BROWSER` with a shim that
- * logs the URL instead, rewrite its 127.0.0.1 callback to this Pixcode
+ * logs the URL instead, rewrite its 127.0.0.1 callback to this Harpy
  * origin, and hand the link to the admin. After bore.dk sign-in the browser
  * lands back on /api/share/bore/callback, which we proxy to the local
  * listener — so sign-in works from any device, including a phone.
