@@ -15,13 +15,17 @@ import { ShareCard } from './ShareCard.jsx'
 import { ShareModal } from './ShareModal.jsx'
 import { ProjectSwitcher } from './ProjectSwitcher.jsx'
 import { FileTree } from './FileTree.jsx'
-import { EditorPane } from './EditorPane.jsx'
-import { GitPanel } from './GitPanel.jsx'
-import { AgentPanel } from './AgentPanel.jsx'
-import { Terminals } from './Terminals.jsx'
 import { ActivityPanel } from './ActivityPanel.jsx'
 import { UpdateChecker } from './UpdateChecker.jsx'
 import { InstallBanner } from './InstallBanner.jsx'
+import { lazyView } from '../lib/lazy.jsx'
+
+// Heavy views load on first use so the initial bundle skips the CodeMirror
+// and xterm chunks entirely.
+const EditorPane = lazyView(() => import('./EditorPane.jsx'), 'EditorPane')
+const GitPanel = lazyView(() => import('./GitPanel.jsx'), 'GitPanel')
+const AgentPanel = lazyView(() => import('./AgentPanel.jsx'), 'AgentPanel')
+const Terminals = lazyView(() => import('./Terminals.jsx'), 'Terminals')
 
 const views = [
   { id: 'explorer', label: 'view.explorer', icon: 'explorer', mobile: 'files' },

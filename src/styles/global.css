@@ -1,5 +1,5 @@
 /* ============================================================================
-   Pixcode design system — single-pass stylesheet.
+   Harpy design system — single-pass stylesheet.
    Every visible surface resolves through the --ui-* tokens below; both themes
    and all vscode-elements controls track the same contract.
 
@@ -393,6 +393,10 @@ vscode-badge, .git-count, .git-badge, .agent-presence-count,
 
 .pane { min-width: 0; min-height: 0; overflow: hidden; background: var(--ui-surface); }
 
+/* Placeholder shown while a code-split view's chunk is fetched — fills its
+   container so panes don't collapse for a frame. */
+.lazy-view { flex: 1; min-height: 120px; }
+
 /* Keep every flex/grid ancestor shrinkable so xterm receives real pane
    dimensions after a sash drag. */
 .workbench, .auxiliary, .aux-section, .agent-panel, .agent-console,
@@ -418,7 +422,7 @@ vscode-badge, .git-count, .git-badge, .agent-presence-count,
 }
 
 .window-brand { display: flex; min-width: 118px; align-items: center; gap: 8px; }
-.brand-logo { display: block; width: 20px; height: 20px; object-fit: contain; }
+.brand-logo { display: block; width: 30px; height: 30px; border-radius: 7px; object-fit: contain; }
 .window-brand strong { color: var(--ui-text); font-size: 12.5px; font-weight: 650; letter-spacing: .02em; }
 
 .window-nav { display: flex; gap: 2px; }
@@ -1461,7 +1465,7 @@ vscode-badge, .git-count, .git-badge, .agent-presence-count,
   animation: px-rise-in .35s var(--ease-out) backwards;
 }
 
-.welcome-hero img { display: block; width: clamp(46px, 7vw, 64px); height: auto; aspect-ratio: 1; object-fit: contain; }
+.welcome-hero img { display: block; width: clamp(92px, 14vw, 128px); height: auto; aspect-ratio: 1; object-fit: contain; }
 .welcome-hero h1 { margin: 0; font-size: clamp(25px, 4vw, 36px); font-weight: 600; letter-spacing: -.03em; }
 .welcome-hero p { margin: 5px 0 0; color: var(--ui-muted); font-size: 13px; }
 
@@ -2197,6 +2201,50 @@ vscode-badge, .git-count, .git-badge, .agent-presence-count,
 .xterm { min-width: 0; }
 .xterm-viewport { overscroll-behavior: none; }
 
+/* Touch scrollbar — mobile overlay scrollbars cannot be grabbed, so the
+   terminal renders its own thumb along the right edge on coarse pointers. */
+.terminal-scrollbar {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  right: 0;
+  z-index: 5; /* under the edge scroll buttons so they keep their taps */
+  width: 22px;
+  touch-action: none;
+}
+.terminal-scrollbar.hidden { display: none; }
+.terminal-scrollbar-thumb {
+  position: absolute;
+  top: 0;
+  right: 2px;
+  width: 7px;
+  min-height: 28px;
+  border-radius: 4px;
+  background: var(--ui-slider);
+  opacity: .55;
+  transition: opacity 120ms var(--ease-out);
+}
+.terminal-scrollbar.dragging .terminal-scrollbar-thumb { opacity: .95; width: 9px; right: 1px; }
+@media (hover: hover) and (pointer: fine) {
+  .terminal-scrollbar { display: none; }
+}
+
+/* One-tap copy affordance after a long-press selection on touch. */
+.terminal-copy-chip {
+  position: absolute;
+  top: 8px;
+  right: 26px;
+  z-index: 8;
+  padding: 6px 14px;
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .35);
+}
+
 /* Edge scroll arrows — always available; dimmed until hovered on desktop so
    they don't fight the scrollbar, thumb-sized on touch. */
 .terminal-scroll-buttons {
@@ -2216,6 +2264,12 @@ vscode-badge, .git-count, .git-badge, .agent-presence-count,
   .agent-terminal-host:hover .terminal-scroll-buttons,
   .terminal-scroll-buttons:focus-within { opacity: 0.85; }
   .terminal-scroll-buttons:hover { opacity: 1; }
+}
+
+/* On touch the arrows sit in the bottom corner — the centered position would
+   block the middle of the draggable scrollbar. */
+@media (pointer: coarse) {
+  .terminal-scroll-buttons { top: auto; bottom: 20px; transform: none; }
 }
 
 .terminal-scroll-btn {
@@ -2678,7 +2732,7 @@ vscode-badge, .git-count, .git-badge, .agent-presence-count,
   .topbar-actions .update-checker, .topbar-actions > select { display: none; }
 
   .workbench { display: block; position: relative; width: 100%; max-width: 100%; height: auto; min-height: 0; overflow: hidden; padding-bottom: 54px; }
-  .pixcode-keyboard-open .workbench { padding-bottom: 0; }
+  .harpy-keyboard-open .workbench { padding-bottom: 0; }
 
   .activity-bar, .resize-handle, .sidebar, .editor-area, .auxiliary, .bottom-panel { display: none; }
   /* Panes stop above the fixed tab bar — inset:0 would run content under it. */
@@ -2692,9 +2746,9 @@ vscode-badge, .git-count, .git-badge, .agent-presence-count,
     width: 100%;
     height: auto;
   }
-  .pixcode-keyboard-open .sidebar.mobile-active,
-  .pixcode-keyboard-open .editor-area.mobile-active,
-  .pixcode-keyboard-open .auxiliary.mobile-active { bottom: 0; }
+  .harpy-keyboard-open .sidebar.mobile-active,
+  .harpy-keyboard-open .editor-area.mobile-active,
+  .harpy-keyboard-open .auxiliary.mobile-active { bottom: 0; }
   .aux-section { display: none; }
   .aux-section.mobile-view-active { display: flex; }
 
@@ -2705,8 +2759,8 @@ vscode-badge, .git-count, .git-badge, .agent-presence-count,
   .file-tree .tree-toolbar { min-height: 35px; }
   .editor-breadcrumb { min-height: 29px; }
 
-  .pixcode-keyboard-open .shell { height: var(--pixcode-visual-height, 100dvh); min-height: 0; max-height: var(--pixcode-visual-height, 100dvh); }
-  .pixcode-keyboard-open body, .pixcode-keyboard-open #app { height: var(--pixcode-visual-height, 100dvh); max-height: var(--pixcode-visual-height, 100dvh); overflow: hidden; }
+  .harpy-keyboard-open .shell { height: var(--harpy-visual-height, 100dvh); min-height: 0; max-height: var(--harpy-visual-height, 100dvh); }
+  .harpy-keyboard-open body, .harpy-keyboard-open #app { height: var(--harpy-visual-height, 100dvh); max-height: var(--harpy-visual-height, 100dvh); overflow: hidden; }
 
   .terminal-host, .agent-terminal-host,
   .terminal-host .xterm, .agent-terminal-host .xterm { width: 100%; max-width: 100%; }
@@ -2795,7 +2849,7 @@ vscode-badge, .git-count, .git-badge, .agent-presence-count,
   .terminal-mobile-accessory.keyboard-open {
     position: fixed;
     right: 0;
-    bottom: calc(var(--pixcode-keyboard-height, 0px) + 6px);
+    bottom: calc(var(--harpy-keyboard-height, 0px) + 6px);
     left: 0;
     width: 100vw;
     max-width: 100vw;
@@ -2804,11 +2858,11 @@ vscode-badge, .git-count, .git-badge, .agent-presence-count,
   .terminal-mobile-tray.keyboard-open {
     position: fixed;
     right: 5px;
-    bottom: calc(var(--pixcode-keyboard-height, 0px) + 46px + max(5px, env(safe-area-inset-bottom, 0px)) + 13px);
+    bottom: calc(var(--harpy-keyboard-height, 0px) + 46px + max(5px, env(safe-area-inset-bottom, 0px)) + 13px);
     left: 5px;
     width: auto;
     max-width: calc(100vw - 10px);
-    max-height: min(52vh, calc(var(--pixcode-visual-height, 100dvh) - 72px));
+    max-height: min(52vh, calc(var(--harpy-visual-height, 100dvh) - 72px));
     overflow-y: auto;
   }
 
@@ -2868,8 +2922,8 @@ vscode-badge, .git-count, .git-badge, .agent-presence-count,
     color: var(--ui-accent);
   }
 
-  .pixcode-keyboard-open .mobile-tabs { display: none !important; }
-  .pixcode-keyboard-open .terminal-mobile-stage { padding-bottom: calc(46px + max(5px, env(safe-area-inset-bottom, 0px))); }
+  .harpy-keyboard-open .mobile-tabs { display: none !important; }
+  .harpy-keyboard-open .terminal-mobile-stage { padding-bottom: calc(46px + max(5px, env(safe-area-inset-bottom, 0px))); }
 
   .settings-scroll { gap: 14px; padding: 14px 10px 80px; }
   .settings-control-row { align-items: flex-start; flex-direction: column; gap: 9px; }
@@ -3352,3 +3406,79 @@ vscode-button.auth-submit { width: 100%; }
 .share-modal-actions vscode-button::part(base) { white-space: normal; height: auto; min-height: 28px; padding: 4px 12px }
 .share-provider-card { min-width: 0 }
 .share-provider-badges { min-width: 0 }
+
+/* --- automations -------------------------------------------------------- */
+.automation-card .automation-head { min-height: 52px; }
+.automation-head .settings-control-copy { flex: 1 1 200px; }
+.automation-row { align-items: flex-start; padding-block: 11px; }
+.automation-row .settings-control-copy { align-items: flex-start; padding-top: 1px; }
+.automation-row .settings-control-copy > svg { flex: none; margin-top: 2px; }
+.automation-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.automation-actions .tw-icon-button { width: 24px; height: 24px; }
+.automation-running {
+  font-style: normal; font-size: 9px; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--ui-accent-strong);
+  border: 1px solid var(--ui-accent); border-radius: 99px; padding: 1px 6px; margin-left: 6px;
+  animation: px-pulse 1.6s ease-in-out infinite;
+}
+.automation-status { font-size: 9.5px; font-weight: 650; letter-spacing: .03em; text-transform: uppercase; }
+.automation-status.run { color: var(--ui-accent-strong); }
+.automation-status.ok { color: var(--success, #4ec9b0); }
+.automation-status.muted { color: var(--ui-muted); }
+.automation-status.bad { color: var(--error, #e5534b); }
+.automation-hook { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; }
+.automation-hook code {
+  font: 9.5px var(--mono); color: var(--ui-muted);
+  background: var(--ui-input); border-radius: 4px; padding: 1px 5px;
+}
+.automation-hook .tw-icon-button { width: 18px; height: 18px; }
+.automation-modal {
+  z-index: 10001;
+  width: min(560px, calc(100vw - 24px));
+  max-height: min(680px, calc(100dvh - 32px));
+  display: flex; flex-direction: column;
+  border: 1px solid var(--ui-border-strong); border-radius: var(--r-modal);
+  background: var(--ui-surface); color: var(--ui-text);
+  box-shadow: var(--ui-shadow-3);
+  animation: px-modal-in .2s var(--ease-out) backwards;
+}
+.automation-modal-body { display: flex; flex-direction: column; gap: 10px; padding: 12px; }
+.automation-editor {
+  width: 100%; min-height: 220px; resize: vertical;
+  border: 1px solid var(--ui-border); border-radius: var(--r-card);
+  background: var(--ui-input); color: var(--ui-text);
+  font: 11px/1.55 var(--mono); padding: 10px; tab-size: 2;
+}
+.automation-editor:focus { border-color: var(--ui-accent-strong); outline: none; }
+@keyframes px-pulse { 50% { opacity: .45 } }
+.automation-field { display: flex; flex-direction: column; gap: 5px; }
+.automation-field > span { font-size: 11px; font-weight: 600; }
+.automation-field > small { font-size: 10px; line-height: 1.4; }
+.automation-field vscode-textfield, .automation-field vscode-single-select { width: 100%; }
+.automation-task { min-height: 84px; font-family: var(--font, inherit); font-size: 12px; }
+.automation-note { display: block; padding: 8px 10px; border: 1px dashed var(--ui-border); border-radius: var(--r-card); font-size: 10.5px; line-height: 1.5; }
+.automation-check { align-items: flex-start; }
+.automation-check input { margin-top: 2px; }
+.automation-check span { font-size: 11.5px; line-height: 1.45; }
+.automation-options { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.automation-opt {
+  display: flex; align-items: flex-start; gap: 8px; text-align: left;
+  padding: 9px 10px; border: 1px solid var(--ui-border); border-radius: var(--r-card);
+  background: var(--ui-raised); color: var(--ui-text); cursor: pointer;
+  font: inherit; transition: border-color .12s ease, background .12s ease;
+}
+.automation-opt:hover { border-color: var(--ui-accent); }
+.automation-opt.active { border-color: var(--ui-accent-strong); background: var(--ui-accent-soft, color-mix(in srgb, var(--ui-accent-strong) 12%, transparent)); }
+.automation-opt > svg { flex: none; margin-top: 2px; color: var(--ui-accent); }
+.automation-opt span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.automation-opt strong { font-size: 11.5px; font-weight: 600; }
+.automation-opt small { font-size: 10px; color: var(--ui-muted); }
+.automation-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.automation-chip {
+  padding: 5px 11px; border: 1px solid var(--ui-border); border-radius: 99px;
+  background: var(--ui-raised); color: var(--ui-text); cursor: pointer;
+  font: 11px var(--font, inherit); transition: border-color .12s ease, background .12s ease;
+}
+.automation-chip:hover { border-color: var(--ui-accent); }
+.automation-chip.active { border-color: var(--ui-accent-strong); background: var(--ui-accent-strong); color: var(--ui-on-accent, #fff); }
+.automation-chip:disabled { opacity: .4; cursor: not-allowed; }

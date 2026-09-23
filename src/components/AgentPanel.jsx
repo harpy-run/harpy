@@ -4,7 +4,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon } from '@xterm/addon-search'
 import '@xterm/xterm/css/xterm.css'
-import { ws } from '../lib/ws.js'
+import { ws, isConnectionError } from '../lib/ws.js'
 import { t } from '../lib/i18n.js'
 import { useEscape } from '../lib/useEscape.js'
 import { activeAgent, agentSessions, isAdmin, panelOpen, principal, terminalFontSize, terminalScrollSpeed, theme, workspace } from '../state/app.js'
@@ -12,6 +12,7 @@ import { terminalFont, terminalTheme } from '../lib/terminal-theme.js'
 import { watchTerminalResize } from '../lib/terminal-resize.js'
 import { TInput } from './Fields.jsx'
 import { attachTerminalTouchScroll } from '../lib/terminal-touch.js'
+import { attachTerminalKeys } from '../lib/terminal-keys.js'
 import { TerminalScrollButtons } from './TerminalScrollButtons.jsx'
 import { TerminalSearchBox } from './TerminalSearch.jsx'
 import { sanitizeReplay } from '../lib/terminal-replay.js'
@@ -31,7 +32,7 @@ const agentIcons = {
 // is an older instance that only understands `agent.stop`. Keep a small
 // client-side tombstone list and associate each id with the session start
 // time so an id reused after a backend restart is not hidden accidentally.
-const CLOSED_SESSIONS_KEY = 'pixcode.agentClosedSessions'
+const CLOSED_SESSIONS_KEY = 'harpy.agentClosedSessions'
 const CLOSED_SESSION_TTL = 30 * 24 * 60 * 60 * 1_000
 
 function readClosedSessions() {
@@ -96,6 +97,7 @@ function AgentTerminalView({ session, onStatus, onReady, modifiersRef, foreign =
     searchRef.current = search
     terminal.loadAddon(search)
     terminal.open(host.current)
+    attachTerminalKeys(terminal)
     const stopTouchScroll = attachTerminalTouchScroll(host.current, terminal, () => terminalScrollSpeed.value)
     // The active agent tab should be immediately typeable after it is
     // restored; xterm otherwise waits for the first explicit click. Skip the
@@ -181,7 +183,7 @@ function AgentTerminalView({ session, onStatus, onReady, modifiersRef, foreign =
       const resubscribe = foreign ? ws.request('agent', 'watch', { sessionId: session.sessionId }).catch(() => {}) : Promise.resolve()
       resubscribe.finally(() => hydrate())
     }
-    window.addEventListener('pixcode:ws-open', reconnect)
+    window.addEventListener('harpy:ws-open', reconnect)
     const keyboardLayout = (event) => {
       if (!event.detail?.open) return
       requestAnimationFrame(() => {
@@ -193,7 +195,7 @@ function AgentTerminalView({ session, onStatus, onReady, modifiersRef, foreign =
         }
       })
     }
-    window.addEventListener('pixcode:keyboard', keyboardLayout)
+    window.addEventListener('harpy:keyboard', keyboardLayout)
     const toggleSearch = (event) => {
       if (event.detail !== session.sessionId) return
       setSearchOpen((open) => {
@@ -201,7 +203,7 @@ function AgentTerminalView({ session, onStatus, onReady, modifiersRef, foreign =
         return !open
       })
     }
-    window.addEventListener('pixcode:agent-search', toggleSearch)
+    window.addEventListener('harpy:agent-search', toggleSearch)
     let inputErrorShown = false
     const inputDisposable = terminal.onData((data) => {
       if (!canType) return
@@ -238,9 +240,9 @@ function AgentTerminalView({ session, onStatus, onReady, modifiersRef, foreign =
       stopResizeWatcher()
       stopTouchScroll()
       host.current?.removeEventListener('click', focusTerminal)
-      window.removeEventListener('pixcode:ws-open', reconnect)
-      window.removeEventListener('pixcode:keyboard', keyboardLayout)
-      window.removeEventListener('pixcode:agent-search', toggleSearch)
+      window.removeEventListener('harpy:ws-open', reconnect)
+      window.removeEventListener('harpy:keyboard', keyboardLayout)
+      window.removeEventListener('harpy:agent-search', toggleSearch)
       dataUnsubscribe()
       inputDisposable.dispose()
       terminal.dispose()
@@ -371,7 +373,10 @@ export function AgentPanel() {
       setModalOpen(true)
       load(true)
     }
-    const reconnect = () => load()
+    const reconnect = () => {
+      setError((e) => isConnectionError(e) ? '' : e)
+      load()
+    }
     const workspaceChange = () => {
       selectSession('')
       load()
@@ -421,17 +426,15 @@ export function AgentPanel() {
         return next
       })
     })
-    window.addEventListener('pixcode:ws-open', reconnect)
-    window.addEventListener('pixcode:workspace-change', workspaceChange)
-    window.addEventListener('pixcode:new-agent', openNewSession)
-    const presenceTimer = setInterval(fetchPresence, 20_000)
+    window.addEventListener('harpy:ws-open', reconnect)
+    window.addEventListener('harpy:workspace-change', workspaceChange)
+    window.addEventListener('harpy:new-agent', openNewSession)
     load()
     fetchPresence()
     return () => {
-      window.removeEventListener('pixcode:ws-open', reconnect)
-      window.removeEventListener('pixcode:workspace-change', workspaceChange)
-      window.removeEventListener('pixcode:new-agent', openNewSession)
-      clearInterval(presenceTimer)
+      window.removeEventListener('harpy:ws-open', reconnect)
+      window.removeEventListener('harpy:workspace-change', workspaceChange)
+      window.removeEventListener('harpy:new-agent', openNewSession)
       agentsPush()
       presencePush()
       fsPush()
@@ -501,7 +504,7 @@ export function AgentPanel() {
   async function openMemory() {
     try {
       const { path } = await ws.request('agent', 'memory', { workspace: workspace.value?.path || '' })
-      if (path) window.dispatchEvent(new CustomEvent('pixcode:open-file', { detail: path }))
+      if (path) window.dispatchEvent(new CustomEvent('harpy:open-file', { detail: path }))
     } catch (requestError) { setError(requestError.message) }
   }
 
@@ -511,7 +514,7 @@ export function AgentPanel() {
     setError('')
     try {
       const prompt = handoffItem
-        ? `Read .pixcode/handoffs/${handoffItem.name} and continue the work it describes.`
+        ? `Read .harpy/handoffs/${handoffItem.name} and continue the work it describes.`
         : ''
       const session = await ws.request('agent', 'start', { agent: agent.id, workspace: workspace.value?.path || '', cols: 100, rows: 30, prompt })
       setSessions((current) => current.some((item) => item.sessionId === session.sessionId)
@@ -533,7 +536,7 @@ export function AgentPanel() {
     setInstalling(true)
     setError('')
     try {
-      const { id } = await ws.request('pty', 'create', { cols: 100, rows: 30, workspace: workspace.value?.path || '', command: `${command}; echo "[pixcode] install finished"` })
+      const { id } = await ws.request('pty', 'create', { cols: 100, rows: 30, workspace: workspace.value?.path || '', command: `${command}; echo "[harpy] install finished"` })
       setInstallTarget(null)
       setModalOpen(false)
       panelOpen.value = true
@@ -691,7 +694,7 @@ export function AgentPanel() {
         <span class="agent-header-spacer" />
         {activeSession?.status === 'running' && (!viewingForeign || isAdmin.value) && <vscode-button secondary icon="debug-stop" onClick={() => stopSession(activeSession.sessionId)}>{t('agent.stop')}</vscode-button>}
         {broadcastTargets.length > 1 && <vscode-toolbar-button icon="megaphone" class={broadcastOpen ? 'active' : ''} title={t('agent.broadcast')} aria-label={t('agent.broadcast')} onClick={() => toggleBroadcast(broadcastTargets)}></vscode-toolbar-button>}
-        {activeSession && <vscode-toolbar-button icon="search" title={t('terminal.search')} aria-label={t('terminal.search')} onClick={() => window.dispatchEvent(new CustomEvent('pixcode:agent-search', { detail: activeSession.sessionId }))}></vscode-toolbar-button>}
+        {activeSession && <vscode-toolbar-button icon="search" title={t('terminal.search')} aria-label={t('terminal.search')} onClick={() => window.dispatchEvent(new CustomEvent('harpy:agent-search', { detail: activeSession.sessionId }))}></vscode-toolbar-button>}
         <vscode-toolbar-button icon="book" title={t('agent.memory')} aria-label={t('agent.memory')} onClick={openMemory}></vscode-toolbar-button>
         <vscode-toolbar-button icon="refresh" class={refreshing ? 'spin' : ''} onClick={() => load(true)} disabled={refreshing} title={t('agent.refresh')} aria-label={t('agent.refresh')}></vscode-toolbar-button>
       </div>

@@ -29,6 +29,7 @@ export function PreviewPane() {
   const [frameKey, setFrameKey] = useState(0)
   const [error, setError] = useState('')
   const scanningRef = useRef(false)
+  const targetCountRef = useRef(0)
 
   async function scan() {
     if (scanningRef.current) return
@@ -36,6 +37,7 @@ export function PreviewPane() {
     try {
       const { targets: found } = await api.get('/api/preview/targets')
       setTargets(found || [])
+      targetCountRef.current = found?.length || 0
       setError('')
     } catch (requestError) {
       setError(requestError.message)
@@ -44,13 +46,25 @@ export function PreviewPane() {
     }
   }
 
+  // Discovery stays snappy (5s) only while nothing is listening yet; once a
+  // dev server is up the loop relaxes to 30s, and hidden tabs don't poll.
   useEffect(() => {
-    scan()
-    const interval = setInterval(scan, 5_000)
-    const reconnect = () => scan()
-    window.addEventListener('harpy:ws-open', reconnect)
-    window.addEventListener('harpy:workspace-change', scan)
-    return () => { clearInterval(interval); window.removeEventListener('harpy:ws-open', reconnect); window.removeEventListener('harpy:workspace-change', scan) }
+    let timer
+    const tick = async () => {
+      if (!document.hidden) await scan()
+      timer = setTimeout(tick, targetCountRef.current ? 30_000 : 5_000)
+    }
+    const visible = () => { if (!document.hidden) scan() }
+    tick()
+    window.addEventListener('harpy:ws-open', visible)
+    window.addEventListener('harpy:workspace-change', visible)
+    document.addEventListener('visibilitychange', visible)
+    return () => {
+      clearTimeout(timer)
+      window.removeEventListener('harpy:ws-open', visible)
+      window.removeEventListener('harpy:workspace-change', visible)
+      document.removeEventListener('visibilitychange', visible)
+    }
   }, [])
 
   const active = targets.find((item) => String(item.port) === selected)
