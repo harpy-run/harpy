@@ -8,6 +8,21 @@ import { installSkillRepo, listSkills, removeSkill, skillsDirFor } from '../skil
 import { workspaceRoot } from '../workspace.js'
 import { closeRunner, detachSubscriber, getHistory, inputRunner, listChangedFiles, listPresence, listSessions, resizeRunner, sendToRunner, startRunner, stopRunner, unwatchRunner, watchRunner } from '../agents/runner.js'
 
+// Shared gate for the skills ops: `for` is admin-only, and user scope writes
+// into a home dir — with no private home that is the daemon's own
+// ~/.claude/skills, shared by every account, so it needs admin rights (or a
+// member who actually owns a private home).
+function skillsTarget(ctx, { scope, target, workspace }) {
+  const self = ctx?.principal?.sub || 'owner'
+  const sub = target ? String(target) : self
+  const access = sub !== self ? requireAdmin(ctx) : requireAccess(ctx)
+  if (scope !== 'workspace' && !access.admin && !cliEnvInfo(sub).home) {
+    throw httpError(403, 'user-scope skills require a private CLI home')
+  }
+  const base = scope === 'workspace' ? workspaceRoot(workspace, ctx) : ''
+  return { sub, base }
+}
+
 export const agentChannel = {
   ops: {
     agents: async (ctx, { refresh } = {}) => {
@@ -18,7 +33,10 @@ export const agentChannel = {
     start: (ctx, data = {}) => {
       const access = requireAccess(ctx)
       if (access.agents && !access.agents.has(String(data.agent || ''))) throw httpError(403, 'agent is not assigned to this account')
-      return startRunner(ctx, data)
+      // Forward only the public fields — in particular `automation` stays
+      // server-owned, because it relaxes the cwd workspace check.
+      const { agent, prompt, cwd, workspace, cols, rows } = data
+      return startRunner(ctx, { agent, prompt, cwd, workspace, cols, rows })
     },
     input: (ctx, { sessionId, data } = {}) => inputRunner(ctx, sessionId, data),
     resize: (ctx, { sessionId, cols, rows } = {}) => resizeRunner(ctx, sessionId, cols, rows),
@@ -32,7 +50,7 @@ export const agentChannel = {
     unwatch: (ctx, { sessionId } = {}) => unwatchRunner(ctx, sessionId),
     changedFiles: (ctx, { sessionId } = {}) => { requireAccess(ctx); return listChangedFiles(ctx, sessionId) },
     // Session handoffs + shared workspace memory: workspaceRoot() applies the
-    // caller's project allowlist before any file under .pixcode/ is touched.
+    // caller's project allowlist before any file under .harpy/ is touched.
     handoffs: (ctx, { workspace } = {}) => listHandoffs(workspaceRoot(workspace, ctx)),
     handoff: (ctx, { workspace, name } = {}) => ({ content: readHandoff(workspaceRoot(workspace, ctx), name) }),
     memory: (ctx, { workspace } = {}) => ({ path: ensureMemory(workspaceRoot(workspace, ctx)) }),
@@ -59,30 +77,18 @@ export const agentChannel = {
     // the agent's skills dir. `for` manages another user's private home
     // (admin-only); `workspace` scope installs into .claude/skills inside the
     // project — the same allowlist the fs ops use applies via workspaceRoot.
-    skills: (ctx, { agent, scope, for: target, workspace } = {}) => {
-      const self = ctx?.principal?.sub || 'owner'
-      const sub = target ? String(target) : self
-      if (sub !== self) requireAdmin(ctx)
-      else requireAccess(ctx)
-      const base = scope === 'workspace' ? workspaceRoot(workspace, ctx) : ''
-      return { skills: listSkills(skillsDirFor({ agent, scope, sub, workspace: base })) }
+    skills: (ctx, params = {}) => {
+      const { sub, base } = skillsTarget(ctx, params)
+      return { skills: listSkills(skillsDirFor({ agent: params.agent, scope: params.scope, sub, workspace: base })) }
     },
-    skillInstall: async (ctx, { agent, scope, for: target, workspace, repo } = {}) => {
-      const self = ctx?.principal?.sub || 'owner'
-      const sub = target ? String(target) : self
-      if (sub !== self) requireAdmin(ctx)
-      else requireAccess(ctx)
-      const base = scope === 'workspace' ? workspaceRoot(workspace, ctx) : ''
-      const dir = skillsDirFor({ agent, scope, sub, workspace: base })
-      return installSkillRepo({ repo, dir })
+    skillInstall: async (ctx, params = {}) => {
+      const { sub, base } = skillsTarget(ctx, params)
+      const dir = skillsDirFor({ agent: params.agent, scope: params.scope, sub, workspace: base })
+      return installSkillRepo({ repo: params.repo, dir })
     },
-    skillRemove: (ctx, { agent, scope, for: target, workspace, name } = {}) => {
-      const self = ctx?.principal?.sub || 'owner'
-      const sub = target ? String(target) : self
-      if (sub !== self) requireAdmin(ctx)
-      else requireAccess(ctx)
-      const base = scope === 'workspace' ? workspaceRoot(workspace, ctx) : ''
-      return removeSkill(skillsDirFor({ agent, scope, sub, workspace: base }), name)
+    skillRemove: (ctx, params = {}) => {
+      const { sub, base } = skillsTarget(ctx, params)
+      return removeSkill(skillsDirFor({ agent: params.agent, scope: params.scope, sub, workspace: base }), params.name)
     },
     // Per-user CLI environment: names-only view (values are write-only) plus
     // the private-home toggle. Any signed-in user manages their own record;
