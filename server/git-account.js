@@ -93,8 +93,17 @@ export function credentialFor(ctx, remoteUrl) {
   return {
     args: [
       '-c', 'credential.helper=',
-      '-c', 'credential.helper=!f() { echo "username=oauth2"; echo "password=$PIXCODE_GIT_TOKEN"; }; f'
+      '-c', 'credential.helper=!f() { echo "username=oauth2"; echo "password=$HARPY_GIT_TOKEN"; }; f'
     ],
-    env: { PIXCODE_GIT_TOKEN: token }
+    env: { HARPY_GIT_TOKEN: token }
   }
+}
+
+// Strips the invocation's injected token — and any user:pass embedded in a
+// remote URL — out of text that may be returned to a client or logged.
+// Pass the env that credentialFor() produced so the literal token is known.
+export function scrubCredentials(text, env = {}) {
+  let out = String(text || '')
+  if (env.HARPY_GIT_TOKEN) out = out.split(env.HARPY_GIT_TOKEN).join('***')
+  return out.replace(/(\w[\w+.-]*:\/\/)[^\s/:@]+:[^\s@]+@/g, '$1***@')
 }

@@ -4,7 +4,7 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 import { httpError } from '../util/http.js'
 import { workspacePath } from '../workspace.js'
-import { credentialFor, getGitAccount, identityArgs, saveGitAccount } from '../git-account.js'
+import { credentialFor, getGitAccount, identityArgs, saveGitAccount, scrubCredentials } from '../git-account.js'
 import { recordActivity } from '../activity.js'
 import { adoptGithubUser, appBootstrap, devicePoll, deviceStart, oauthConfigInfo, setGithubClientId, webStart } from '../git-oauth.js'
 import { requireAccess, requireAdmin } from '../auth.js'
@@ -86,9 +86,9 @@ async function remoteOperation(command, remote, branch, requestedWorkspace, ctx)
   try {
     const { stdout, stderr } = await git([...cred.args, ...args], { timeout: 120_000 }, requestedWorkspace, cred.env)
     try { recordActivity(workspacePath(requestedWorkspace, '.', ctx).base, 'git', { op: command, user: ctx?.principal?.username || '' }) } catch { void 0 }
-    return { ok: true, output: `${stdout}${stderr}` }
+    return { ok: true, output: scrubCredentials(`${stdout}${stderr}`, cred.env) }
   } catch (error) {
-    const detail = `${error.stdout || ''}${error.stderr || ''}`.trim()
+    const detail = scrubCredentials(`${error.stdout || ''}${error.stderr || ''}`, cred.env).trim()
     if (error.code === 'ETIMEDOUT' || error.killed) throw httpError(504, 'git operation timed out')
     throw httpError(400, detail || error.message || `git ${command} failed`)
   }
@@ -275,7 +275,7 @@ export const gitChannel = {
     // OAuth device flow: GitHub hands the user a short code they approve in
     // the browser; polling swaps it for a token that then flows through the
     // normal connectGitHub path. The client_id is a public app identifier —
-    // resolved from PIXCODE_GITHUB_CLIENT_ID or the admin-managed store.
+    // resolved from HARPY_GITHUB_CLIENT_ID or the admin-managed store.
     oauthConfig: (ctx) => { requireAccess(ctx); return oauthConfigInfo() },
     // Admin-only one-time setup: builds the manifest + nonce the client posts
     // to github.com/settings/apps/new so the GitHub App creates itself.

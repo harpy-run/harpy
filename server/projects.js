@@ -6,7 +6,7 @@ import { promisify } from 'node:util'
 import { config } from './config.js'
 import { httpError } from './util/http.js'
 import { registerWorkspace } from './workspace.js'
-import { credentialFor } from './git-account.js'
+import { credentialFor, scrubCredentials } from './git-account.js'
 
 let active = null
 const execFileAsync = promisify(execFile)
@@ -152,10 +152,10 @@ function directoryNames() {
 
 function nextDefaultName() {
   const numbers = directoryNames().flatMap((name) => {
-    const match = /^pixcode-project-(\d+)$/.exec(name)
+    const match = /^harpy-project-(\d+)$/.exec(name)
     return match ? [Number(match[1])] : []
   })
-  return `pixcode-project-${Math.max(0, ...numbers) + 1}`
+  return `harpy-project-${Math.max(0, ...numbers) + 1}`
 }
 
 function activeRecord() {
@@ -362,12 +362,12 @@ export async function cloneProject(url, name, ctx) {
   if (!projectName || !/^[\p{L}\p{N}._-]+$/u.test(projectName)) throw httpError(400, 'invalid project name')
   const destination = insideRoot(projectName)
   if (fs.existsSync(destination)) throw httpError(409, 'project already exists')
+  const cred = ctx ? credentialFor(ctx, source) : { args: [], env: {} }
   try {
-    const cred = ctx ? credentialFor(ctx, source) : { args: [], env: {} }
     await execFileAsync('git', [...cred.args, 'clone', '--', source, destination], { env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never', ...cred.env }, timeout: 120_000, maxBuffer: 4 * 1024 * 1024 })
   } catch (error) {
     try { fs.rmSync(destination, { recursive: true, force: true }) } catch { void 0 }
-    const detail = `${error.stderr || ''}${error.stdout || ''}`.trim()
+    const detail = scrubCredentials(`${error.stderr || ''}${error.stdout || ''}`, cred.env).trim()
     throw httpError(error.killed ? 504 : 400, detail || 'git clone failed')
   }
   return projectRecord(projectName, false)
