@@ -1,7 +1,14 @@
 import { api, backendOrigin, getToken, setToken } from './api.js'
 
+// Connectivity failures die with the socket — once it reconnects they are
+// stale. Panels clear such errors on `harpy:ws-open` via this check so an old
+// "websocket disconnected" never outlives the reconnect that fixed it.
+export function isConnectionError(message) {
+  return /websocket disconnected|failed to fetch|network ?error|server unavailable|load failed|timeout/i.test(String(message || ''))
+}
+
 function clientId() {
-  const key = 'pixcode.clientId'
+  const key = 'harpy.clientId'
   try {
     const existing = localStorage.getItem(key)
     if (existing) return existing
@@ -18,7 +25,7 @@ function clientId() {
 
 // JWT bodies carry `exp` in ms. Reading it here lets the client skip a doomed
 // upgrade and go straight to the login screen instead of retrying a dead
-// credential forever. Non-JWT keys (px_…) fail the parse and connect normally.
+// credential forever. Non-JWT keys (hp_…) fail the parse and connect normally.
 function tokenExpired() {
   const token = getToken()
   if (!token) return true
@@ -53,7 +60,7 @@ export class MultiplexWS {
     // The revoked-account path reaches here with the socket still open —
     // close it so the server drops the connection instead of serving ops.
     this.socket?.close()
-    window.dispatchEvent(new Event('pixcode:auth-expired'))
+    window.dispatchEvent(new Event('harpy:auth-expired'))
   }
 
   scheduleReconnect() {
@@ -78,7 +85,10 @@ export class MultiplexWS {
     if (tokenExpired()) { this.expireSession(); return }
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
     const endpoint = backendOrigin ? backendOrigin.replace(/^http/, 'ws') : `${protocol}//${location.host}`
-    const socket = new WebSocket(`${endpoint}/ws?token=${encodeURIComponent(token)}&client=${encodeURIComponent(clientId())}`)
+    // The credential rides the WebSocket subprotocol header, not the URL —
+    // tokens in URLs end up in proxy logs and browser history. The server
+    // still accepts ?token=/?key= for older clients and CLI scripts.
+    const socket = new WebSocket(`${endpoint}/ws?client=${encodeURIComponent(clientId())}`, ['harpy', token])
     this.socket = socket
     socket.wasOpen = false
     socket.onopen = () => {
@@ -87,7 +97,7 @@ export class MultiplexWS {
       for (const frame of this.queue.splice(0)) socket.send(frame)
       // Let mounted views re-attach long-lived sessions and re-fit terminals
       // after a transient connection loss.
-      window.dispatchEvent(new Event('pixcode:ws-open'))
+      window.dispatchEvent(new Event('harpy:ws-open'))
     }
     this.socket.onmessage = (event) => {
       let frame

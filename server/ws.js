@@ -14,6 +14,12 @@ export function createHub(server) {
   // The editor accepts files up to 5 MiB, so saves must fit inside one frame.
   // 8 MiB leaves headroom while still stopping the 100 MiB default's abuse.
   const wss = new WebSocketServer({ noServer: true, maxPayload: 8 * 1024 * 1024 })
+  // ws requires the upgrade response to select one of the offered
+  // subprotocols — the credential slot itself is never echoed back.
+  wss.on('headers', (headers, req) => {
+    const offered = String(req.headers['sec-websocket-protocol'] || '').split(',').map((s) => s.trim())
+    if (offered.includes('harpy')) headers.push('Sec-WebSocket-Protocol: harpy')
+  })
 
   const heartbeat = setInterval(() => {
     for (const ws of connections) {
@@ -25,11 +31,17 @@ export function createHub(server) {
   }, PING_INTERVAL_MS)
   heartbeat.unref?.()
 
-  function authenticate(url) {
-    const key = url.searchParams.get('key')
-    if (key && checkApiKey(key)) return { sub: 'owner', role: 'admin' }
-    const token = url.searchParams.get('token')
-    return token ? resolvePrincipal(verifyToken(token)) : null
+  function authenticate(req, url) {
+    // Preferred transport is Sec-WebSocket-Protocol ("harpy, <credential>"):
+    // credentials in URLs leak into access logs, browser history, and
+    // referrer chains. ?key=/?token= remain for older clients and scripts.
+    const offered = String(req.headers['sec-websocket-protocol'] || '')
+      .split(',').map((s) => s.trim()).filter(Boolean)
+    const viaProtocol = offered.indexOf('harpy') >= 0 ? offered[offered.indexOf('harpy') + 1] : ''
+    const credential = viaProtocol || url.searchParams.get('key') || url.searchParams.get('token') || ''
+    if (!credential) return null
+    if (credential.startsWith('hp_')) return checkApiKey(credential) ? { sub: 'owner', role: 'admin' } : null
+    return resolvePrincipal(verifyToken(credential))
   }
 
   function broadcast(channel, event, data) {
@@ -43,7 +55,7 @@ export function createHub(server) {
     let url
     try { url = new URL(req.url, 'http://localhost') } catch { socket.destroy(); return }
     if (url.pathname !== '/ws') { socket.destroy(); return }
-    const principal = authenticate(url)
+    const principal = authenticate(req, url)
     if (!principal) {
       socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
       socket.destroy()

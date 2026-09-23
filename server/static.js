@@ -39,7 +39,12 @@ export function serveStatic(req, res, root) {
     if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) return false
     const type = MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream'
     const stat = fs.statSync(filePath)
-    res.writeHead(200, { 'content-type': type, 'content-length': stat.size })
+    res.writeHead(200, {
+      'content-type': type,
+      'content-length': stat.size,
+      'x-content-type-options': 'nosniff',
+      'x-frame-options': 'SAMEORIGIN'
+    })
     if (req.method === 'HEAD') { res.end(); return true }
     // The file can vanish between stat() and open() — an unhandled stream
     // 'error' event would crash the process, so fail the request instead.

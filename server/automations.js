@@ -512,18 +512,23 @@ export function automationRoutes(router) {
     const slug = String(req.params.slug || '')
     const raw = await readRawBody(req)
     const signature = req.headers['x-harpy-signature'] || req.headers['x-hub-signature-256'] || ''
+    // A slug may exist in several workspaces — a signature that fails for
+    // one must not shadow a matching automation in another, so mismatch
+    // continues the scan rather than answering 401 outright.
+    let matched = false
     for (const ws of listKnownWorkspaces()) {
       const automation = listAutomations(ws).find((a) => a.slug === slug && a.on === 'webhook')
       if (!automation) continue
+      matched = true
       const secret = webhookSecret(ws, slug)
       const expected = `sha256=${crypto.createHmac('sha256', secret).update(raw).digest('hex')}`
       const ok = signature.length === expected.length &&
         crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))
-      if (!ok) throw httpError(401, 'invalid signature')
+      if (!ok) continue
       const result = await fireAutomation(ws, slug, { trigger: 'webhook', detail: { body: raw.toString('utf8').slice(0, 4000) } })
       return { ok: true, ...result }
     }
-    throw httpError(404, 'no webhook automation with that slug')
+    throw httpError(matched ? 401 : 404, matched ? 'invalid signature' : 'no webhook automation with that slug')
   }, { auth: false })
 }
 

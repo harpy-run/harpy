@@ -8,7 +8,9 @@ export function sendJson(res, status, data) {
   if (res.writableEnded) return
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
-    'cache-control': 'no-store'
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
+    'x-frame-options': 'SAMEORIGIN'
   })
   res.end(JSON.stringify(data ?? null))
 }
