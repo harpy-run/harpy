@@ -190,6 +190,18 @@ export function requireAdmin(ctx) {
   return access
 }
 
+// Sessions/terminals belong to the account, not the browser tab: a phone, a
+// laptop, and a second tab all attach to the same running resources.
+export function ownerKey(ctx) {
+  return String(ctx?.principal?.sub || 'owner')
+}
+
+// Ops that manage another account's record are admin-only; acting on your
+// own just needs a live session.
+export function requireSelfOrAdmin(ctx, sub) {
+  return sub && sub !== ownerKey(ctx) ? requireAdmin(ctx) : requireAccess(ctx)
+}
+
 export function listUsers() {
   const users = (state?.users || []).map(publicUser)
   if (state?.username) {

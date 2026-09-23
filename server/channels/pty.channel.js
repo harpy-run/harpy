@@ -3,7 +3,7 @@ import { httpError } from '../util/http.js'
 import { enhancedEnv } from '../util/env.js'
 import { cliEnvFor } from '../cli-env.js'
 import { workspaceCwd, workspaceRoot } from '../workspace.js'
-import { accessAlive, requireAdmin } from '../auth.js'
+import { accessAlive, ownerKey, requireAdmin } from '../auth.js'
 import { recordActivity } from '../activity.js'
 
 const shells = new Map()
@@ -14,9 +14,6 @@ const MAX_HISTORY_BYTES = 2 * 1024 * 1024
 // device reattaches to the same running shells. The whole channel is
 // admin-only — a PTY is a daemon-user shell, and a member's project
 // allowlist was never meant to grant host-level command execution.
-function ownerKey(ctx) {
-  return String(ctx?.principal?.sub || 'owner')
-}
 
 function defaultShell() {
   return process.env.SHELL || (process.platform === 'win32' ? 'powershell.exe' : 'bash')

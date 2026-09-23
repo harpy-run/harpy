@@ -1,5 +1,5 @@
 import { listAgents } from '../agents/adapter.js'
-import { requireAccess, requireAdmin } from '../auth.js'
+import { ownerKey, requireAccess, requireSelfOrAdmin } from '../auth.js'
 import { httpError } from '../util/http.js'
 import { cliEnvInfo, saveCliEnv } from '../cli-env.js'
 import { ensureMemory, listHandoffs, readHandoff } from '../handoffs.js'
@@ -15,7 +15,7 @@ import { closeRunner, detachSubscriber, getHistory, inputRunner, listChangedFile
 function skillsTarget(ctx, { scope, target, workspace }) {
   const self = ctx?.principal?.sub || 'owner'
   const sub = target ? String(target) : self
-  const access = sub !== self ? requireAdmin(ctx) : requireAccess(ctx)
+  const access = requireSelfOrAdmin(ctx, target ? sub : null)
   if (scope !== 'workspace' && !access.admin && !cliEnvInfo(sub).home) {
     throw httpError(403, 'user-scope skills require a private CLI home')
   }
@@ -95,18 +95,12 @@ export const agentChannel = {
     // admins may pass `for` to manage a member's (e.g. grant a private home
     // so the member signs in to claude/devin/gh with their own account).
     cliEnv: (ctx, { for: target } = {}) => {
-      const self = ctx?.principal?.sub || 'owner'
-      const sub = target ? String(target) : self
-      if (sub !== self) requireAdmin(ctx)
-      else requireAccess(ctx)
-      return cliEnvInfo(sub)
+      requireSelfOrAdmin(ctx, target ? String(target) : null)
+      return cliEnvInfo(target ? String(target) : ownerKey(ctx))
     },
     saveCliEnv: (ctx, { for: target, env, home } = {}) => {
-      const self = ctx?.principal?.sub || 'owner'
-      const sub = target ? String(target) : self
-      if (sub !== self) requireAdmin(ctx)
-      else requireAccess(ctx)
-      return saveCliEnv(sub, { env, home })
+      requireSelfOrAdmin(ctx, target ? String(target) : null)
+      return saveCliEnv(target ? String(target) : ownerKey(ctx), { env, home })
     }
   },
   onClose(ctx) { detachSubscriber(ctx) }

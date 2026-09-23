@@ -8,7 +8,7 @@ import { config } from '../config.js'
 import { httpError } from '../util/http.js'
 import { enhancedEnv } from '../util/env.js'
 import { cliEnvFor } from '../cli-env.js'
-import { accessAlive, accessFor, listUsers } from '../auth.js'
+import { accessAlive, accessFor, listUsers, ownerKey } from '../auth.js'
 import { projectIdForPath, workspaceCwd, workspaceRoot } from '../workspace.js'
 import { recordActivity } from '../activity.js'
 import { pinFsWatcher, unpinFsWatcher } from '../channels/fs.channel.js'
@@ -67,12 +67,7 @@ function persistSessions() {
   } catch { /* the registry is best-effort; sessions keep working without it */ }
 }
 
-// Sessions belong to the account, not the browser tab: a phone, a laptop, and
-// a second tab all attach to the same running agents and see the same output.
-// Per-user still isolates members from each other.
-function ownerKey(ctx) {
-  return String(ctx?.principal?.sub || 'owner')
-}
+
 
 // Older builds stored `sub:clientId`; strip the client suffix so sessions
 // recorded before per-user ownership still reattach after an upgrade.
