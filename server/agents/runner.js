@@ -9,7 +9,7 @@ import { httpError } from '../util/http.js'
 import { enhancedEnv } from '../util/env.js'
 import { cliEnvFor } from '../cli-env.js'
 import { accessAlive, accessFor, listUsers } from '../auth.js'
-import { workspaceCwd, workspaceRoot } from '../workspace.js'
+import { projectIdForPath, workspaceCwd, workspaceRoot } from '../workspace.js'
 import { recordActivity } from '../activity.js'
 import { pinFsWatcher, unpinFsWatcher } from '../channels/fs.channel.js'
 import { ensureMemory, MEMORY_PROMPT_HINT, tailFromHistory, writeHandoff } from '../handoffs.js'
@@ -57,6 +57,7 @@ function persistSessions() {
         agent: session.state.agent,
         workspace: session.workspace,
         cwd: session.state.cwd,
+        automation: session.automation || undefined,
         owner: session.owner,
         index: session.index,
         startedAt: session.startedAt,
@@ -149,7 +150,7 @@ async function archiveHandoff(session) {
     } catch { branch = '' }
     const name = writeHandoff(session, { files, branch, tail: tailFromHistory(session.history) })
     if (name) {
-      recordActivity(session.workspace, 'agent', { action: 'handoff', agent: session.state.agent, index: session.index, files: [`.pixcode/handoffs/${name}`], user: session.ownerName })
+      recordActivity(session.workspace, 'agent', { action: 'handoff', agent: session.state.agent, index: session.index, files: [`.harpy/handoffs/${name}`], user: session.ownerName })
       notifyWebhook('agent.handoff', {
         title: `${session.state.agent} #${session.index || 1} wrote a handoff`,
         body: `${files.length} changed file${files.length === 1 ? '' : 's'}${session.ownerName ? ` · ${session.ownerName}` : ''}`,
@@ -160,7 +161,6 @@ async function archiveHandoff(session) {
       void runMemoryDigest({
         agent: session.state.agent,
         workspace: session.workspace,
-        cwd: sessionCwd(session),
         owner: session.owner,
         ownerName: session.ownerName,
         handoffName: name
@@ -168,6 +168,11 @@ async function archiveHandoff(session) {
     }
   } catch { /* handoffs are best-effort */ }
 }
+
+// Automations register a session-end hook at startup — kept as a callback
+// (not an import) so runner.js never cycles into automations.js.
+let sessionEndHook = null
+export function setSessionEndHook(fn) { sessionEndHook = fn }
 
 function handleExit(session, { exitCode, signal }) {
   session.term = null
@@ -188,6 +193,7 @@ function handleExit(session, { exitCode, signal }) {
       session.closedAt = Date.now()
       unpinSessionWorkspace(session)
       void archiveHandoff(session)
+      try { sessionEndHook?.(session) } catch { void 0 }
       persistSessions()
     })
     return
@@ -199,6 +205,7 @@ function handleExit(session, { exitCode, signal }) {
   session.closedAt = Date.now()
   unpinSessionWorkspace(session)
   void archiveHandoff(session)
+  try { sessionEndHook?.(session) } catch { void 0 }
   recordActivity(session.workspace, 'agent', { action: 'exit', agent: session.state.agent, index: session.index, exitCode, user: session.ownerName })
   notifyWebhook('agent.exit', {
     title: `${session.state.agent} #${session.index || 1} finished`,
@@ -224,7 +231,7 @@ async function respawnSession(session, { resume } = {}) {
   if (!args) args = session.adapter.buildTerminalArgs({ prompt: '' })
   emit(session, {
     type: 'data',
-    data: `\r\n\x1b[2m[pixcode] ${resume ? 'server restarted — resuming this agent session' : 'agent process exited unexpectedly — restarting it'}\x1b[0m\r\n`
+    data: `\r\n\x1b[2m[harpy] ${resume ? 'server restarted — resuming this agent session' : 'agent process exited unexpectedly — restarting it'}\x1b[0m\r\n`
   })
   await spawnTerm(session, args)
   session.state.status = 'running'
@@ -242,6 +249,9 @@ async function respawnSession(session, { resume } = {}) {
 // auto-close policy only ever applies to non-running sessions.
 export async function restoreSessions() {
   for (const record of persisted) {
+    // Automation runs are headless one-shots — a daemon restart cannot
+    // redeliver their prompt, so respawning them would leave an empty CLI.
+    if (record.automation) continue
     if (record.status !== 'running' || sessions.has(record.sessionId)) continue
     const AdapterClass = getAdapter(record.agent)
     if (!AdapterClass) continue
@@ -268,18 +278,18 @@ export async function restoreSessions() {
     } catch {
       session.state.status = 'stopped'
       session.closedAt = Date.now()
-      emit(session, { type: 'data', data: '\r\n\x1b[2m[pixcode] could not restart this agent after a server restart\x1b[0m\r\n' })
+      emit(session, { type: 'data', data: '\r\n\x1b[2m[harpy] could not restart this agent after a server restart\x1b[0m\r\n' })
       persistSessions()
     }
   }
 }
 
-export async function startRunner(ctx, { agent, prompt = '', cwd, workspace, cols = 100, rows = 30 } = {}) {
+export async function startRunner(ctx, { agent, prompt = '', cwd, workspace, cols = 100, rows = 30, automation } = {}) {
   const AdapterClass = getAdapter(agent)
   if (!AdapterClass) throw httpError(400, 'unknown agent')
   const sessionId = `s_${++counter}`
   const requestedWorkspace = workspaceRoot(workspace, ctx)
-  // Scaffold .pixcode/ (MEMORY.md, gitignore, AGENTS.md pointer) before the
+  // Scaffold .harpy/ (MEMORY.md, gitignore, AGENTS.md pointer) before the
   // spawn so the files exist by the time the agent's first prompt arrives.
   ensureMemory(requestedWorkspace)
   // A launch prompt is the only channel guaranteed to reach every CLI —
@@ -289,7 +299,11 @@ export async function startRunner(ctx, { agent, prompt = '', cwd, workspace, col
   const session = {
     sessionId,
     adapter: new AdapterClass(),
-    state: { agent, cwd: workspaceCwd(requestedWorkspace, cwd, ctx), status: 'running' },
+    // Automation runs may point cwd at an isolated worktree outside the
+    // workspace root — the synthetic owner ctx already vetted the
+    // definition. The ctx marker (not the client payload) is what unlocks
+    // allowOutside, so a WS client cannot opt out by sending the flag.
+    state: { agent, cwd: workspaceCwd(requestedWorkspace, cwd, ctx, { allowOutside: !!automation && !!ctx?.automation }), status: 'running' },
     // Capture the workspace at spawn time. Selecting another workspace must
     // never move or terminate an already running agent process.
     workspace: requestedWorkspace,
@@ -304,6 +318,7 @@ export async function startRunner(ctx, { agent, prompt = '', cwd, workspace, col
     size: dimensions(cols, rows),
     autoRestarted: false,
     resumedAt: 0,
+    automation: automation || null,
     ownerName: ctx?.principal?.username || ownerKey(ctx)
   }
   let args
@@ -338,6 +353,7 @@ function sessionInfo(session) {
     index: session.index,
     workspace: session.workspace,
     cwd: session.state.cwd,
+    automation: session.automation || null,
     pid: session.term?.pid || null
   }
 }
@@ -346,9 +362,19 @@ function usernamesById() {
   try { return new Map(listUsers().map((user) => [String(user.id), user.username])) } catch { return new Map() }
 }
 
+// Presence, watch, and read-through enforce the same project boundary as
+// fs/git ops: a member may only see foreign sessions that live inside a
+// workspace on their allowlist. Admins are unrestricted.
+function mayReachWorkspace(access, workspace) {
+  if (!access) return false
+  if (access.admin || !access.projects) return true
+  return access.projects.has(projectIdForPath(workspace))
+}
+
 // Read access: the owner, any admin, or a context that explicitly watched the
-// session. Write access: the owner or an admin only — a member can watch an
-// admin's terminal but can never type into it.
+// session (watch itself is allowlist-gated). Write access: the owner or an
+// admin only — a member can watch an admin's terminal but can never type
+// into it.
 function getSession(ctx, sessionId, { write = false } = {}) {
   const session = sessions.get(sessionId)
   if (!session || session.closed) throw httpError(404, 'session not found')
@@ -364,7 +390,7 @@ function getSession(ctx, sessionId, { write = false } = {}) {
     session.subscribers.add(ctx)
     return session
   }
-  if (!write && session.subscribers.has(ctx)) return session
+  if (!write && session.subscribers.has(ctx) && mayReachWorkspace(access, session.workspace)) return session
   throw httpError(404, 'session not found')
 }
 
@@ -425,21 +451,29 @@ export function closeRunner(ctx, sessionId) {
 }
 
 // Live sessions owned by other accounts — the presence strip under the agent
-// terminal header. Everyone signed in may see who is working; writing into a
-// foreign session still requires admin rights (enforced per op above).
+// terminal header. Members only see sessions inside their allowed projects;
+// writing into a foreign session still requires admin rights (enforced per
+// op above).
 export function listPresence(ctx) {
   const me = ownerKey(ctx)
+  const access = accessFor(ctx)
   const names = usernamesById()
   return [...sessions.values()]
     .filter((session) => !session.closed && session.state.status === 'running' && session.owner !== me)
+    .filter((session) => mayReachWorkspace(access, session.workspace))
     .map((session) => ({ ...sessionInfo(session), owner: session.owner, ownerName: names.get(session.owner) || session.owner }))
 }
 
 // Watching subscribes this connection to a foreign session's live output and
-// unlocks its history read. It grants no write access by itself.
+// unlocks its history read. It grants no write access by itself, and it is
+// bounded by the caller's project allowlist — a member cannot tail an admin
+// session running in a project they were never granted.
 export function watchRunner(ctx, sessionId) {
   const session = sessions.get(sessionId)
   if (!session || session.closed) throw httpError(404, 'session not found')
+  if (session.owner !== ownerKey(ctx) && !mayReachWorkspace(accessFor(ctx), session.workspace)) {
+    throw httpError(404, 'session not found')
+  }
   session.subscribers.add(ctx)
   const names = usernamesById()
   return { ...sessionInfo(session), owner: session.owner, ownerName: names.get(session.owner) || session.owner }
