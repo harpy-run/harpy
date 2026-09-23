@@ -1,261 +1,184 @@
 <div align="center">
-  <img src="public/logo.png" alt="Pixcode logo" width="92" height="92" />
-  <h1>Pixcode</h1>
+  <img src="public/logo.png" alt="Harpy logo" width="92" height="92" />
+  <h1>Harpy</h1>
   <p><strong>Self-hosted control plane for AI coding agents.</strong></p>
   <p>
-    Pixcode lets you run AI coding CLIs, inspect files, manage shell and source control,
-    orchestrate agent teams, automate through APIs, and keep long-running work alive from
-    your own computer or server.
+    Harpy wraps the coding CLIs you already use — Claude Code, Codex, Gemini CLI,
+    Qwen Code, OpenCode, Grok CLI, Devin — in one persistent workspace you can reach
+    from a browser, a phone, or the desktop app.
   </p>
   <p>
-    <a href="https://www.npmjs.com/package/@pixelbyte-software/pixcode"><img src="https://img.shields.io/npm/v/@pixelbyte-software/pixcode?style=for-the-badge&color=10b981" alt="npm version" /></a>
-    <a href="https://github.com/alicomert/pixcode/releases/latest"><img src="https://img.shields.io/github/v/release/alicomert/pixcode?style=for-the-badge&color=0ea5e9" alt="latest release" /></a>
+    <a href="https://www.npmjs.com/package/harpy-run"><img src="https://img.shields.io/npm/v/harpy-run?style=for-the-badge&color=10b981" alt="npm version" /></a>
+    <a href="https://github.com/harpy-run/harpy/releases/latest"><img src="https://img.shields.io/github/v/release/harpy-run/harpy?style=for-the-badge&color=0ea5e9" alt="latest release" /></a>
     <img src="https://img.shields.io/badge/Node.js-22%2B-3c873a?style=for-the-badge" alt="Node.js 22+" />
     <img src="https://img.shields.io/badge/Desktop-Windows%20%7C%20macOS%20%7C%20Linux-6366f1?style=for-the-badge" alt="desktop platforms" />
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue?style=for-the-badge" alt="MIT License" /></a>
-    <a href="https://github.com/alicomert/pixcode/discussions"><img src="https://img.shields.io/badge/Discussions-open-9ca3af?style=for-the-badge" alt="Discussions" /></a>
+    <a href="https://github.com/harpy-run/harpy/discussions"><img src="https://img.shields.io/badge/Discussions-open-9ca3af?style=for-the-badge" alt="Discussions" /></a>
   </p>
   <p>
-    <a href="https://buymeacoffee.com/alicomert" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-support%20Pixcode-ffdd00?style=for-the-badge&logo=buymeacoffee&logoColor=000000" alt="Buy me a coffee" /></a>
+    <a href="https://buymeacoffee.com/alicomert" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-support%20Harpy-ffdd00?style=for-the-badge&logo=buymeacoffee&logoColor=000000" alt="Buy me a coffee" /></a>
   </p>
   <p>
-    <a href="https://www.producthunt.com/products/pixcode?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-pixcode" target="_blank" rel="noopener noreferrer"><img alt="Pixcode - A self-hosted control room for AI coding agents. | Product Hunt" width="250" height="54" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1144104&amp;theme=light&amp;t=1778502023682"></a>
-  </p>
-  <p>
-    <a href="https://alicomert.github.io/pixcode/landing.html">Website</a> ·
-    <a href="https://github.com/alicomert/pixcode/releases/latest">Releases</a> ·
-    <a href="public/docs.html">Docs</a> ·
-    <a href="public/openapi.yaml">OpenAPI</a> ·
+    <a href="https://harpy.run">Website</a> ·
+    <a href="https://github.com/harpy-run/harpy/releases/latest">Releases</a> ·
     <a href="CONTRIBUTING.md">Contributing</a>
   </p>
   <p>
-    <a href="https://github.com/alicomert/pixcode/blob/main/docs/languages/README.tr.md">Türkçe</a> ·
-    <a href="https://github.com/alicomert/pixcode/blob/main/docs/languages/README.de.md">Deutsch</a> ·
-    <a href="https://github.com/alicomert/pixcode/blob/main/docs/languages/README.ru.md">Русский</a> ·
-    <a href="https://github.com/alicomert/pixcode/blob/main/docs/languages/README.ja.md">日本語</a> ·
-    <a href="https://github.com/alicomert/pixcode/blob/main/docs/languages/README.ko.md">한국어</a> ·
-    <a href="https://github.com/alicomert/pixcode/blob/main/docs/languages/README.zh-CN.md">简体中文</a>
+    <a href="https://github.com/harpy-run/harpy/blob/main/docs/languages/README.tr.md">Türkçe</a> ·
+    <a href="https://github.com/harpy-run/harpy/blob/main/docs/languages/README.de.md">Deutsch</a> ·
+    <a href="https://github.com/harpy-run/harpy/blob/main/docs/languages/README.ru.md">Русский</a> ·
+    <a href="https://github.com/harpy-run/harpy/blob/main/docs/languages/README.ja.md">日本語</a> ·
+    <a href="https://github.com/harpy-run/harpy/blob/main/docs/languages/README.ko.md">한국어</a> ·
+    <a href="https://github.com/harpy-run/harpy/blob/main/docs/languages/README.zh-CN.md">简体中文</a>
   </p>
 </div>
 
-## What Pixcode Does
+## What Harpy Does
 
-Pixcode is a local web and desktop workspace for AI coding agents. It wraps the
-CLIs developers already use, then adds the missing control layer around them:
-project selection, chat history, file navigation, shell access, Git/local change
-tracking, orchestration, notifications, Telegram control, and API automation.
+Harpy is a local web and desktop workbench for AI coding agents. A small Node
+backend serves the UI over HTTP and multiplexes everything — files, Git,
+terminals, agent sessions — over a single authenticated WebSocket. Run it on
+your laptop or a server, then connect from anywhere.
 
-Use it when one terminal is not enough:
+- Keep Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, Grok CLI, and Devin
+  sessions side by side in one project screen.
+- Browse and edit files, watch changes stream in live, run shells, and review
+  Git status without leaving the app.
+- Agent sessions are real PTYs on the server — they keep running when you close
+  the tab, and reconnect cleanly from another device.
+- Share the whole workspace over a public HTTPS link in one click when a
+  teammate or your phone needs in.
+- Add teammates with role-based access and per-project allowlists instead of
+  handing out SSH.
 
-- You want Claude Code, Cursor CLI, Codex, Gemini CLI, Qwen Code, and OpenCode
-  available from the same project screen.
-- You want agent output, edited files, shell commands, Git status, and task
-  planning visible without switching tools.
-- You want a server or desktop app that keeps work running while you connect
-  from another computer, tablet, phone, or Telegram.
-- You want a real API surface so other tools can create sessions, run agents,
-  inspect projects, and automate workflows with `px_` API keys.
-
-Pixcode is not a hosted cloud IDE. Your source code, CLI sessions, credentials,
-project paths, MCP configuration, local database, and automation keys stay on the
-machine where Pixcode runs unless you intentionally expose or connect them.
+Harpy is not a hosted cloud IDE. Your code, CLI sessions, credentials, and
+project paths stay on the machine where Harpy runs unless you deliberately
+expose them.
 
 ## Screenshots
 
-| Workspace control room | Mobile chat |
+| Workbench | Agent session |
 | --- | --- |
-| <img src="public/screenshots/desktop-main.png" alt="Pixcode desktop workspace with chat, project controls, and side panels" width="480" /> | <img src="public/screenshots/mobile-chat.png" alt="Pixcode mobile chat" width="260" /> |
+| <img src="docs/screenshots/desktop-main.png" alt="Harpy workbench with file explorer, code editor, and terminal" width="480" /> | <img src="docs/screenshots/agent-session.png" alt="Codex session running in the Harpy agent rail beside the editor" width="480" /> |
 
-| CLI selection | Tools and MCP |
-| --- | --- |
-| <img src="public/screenshots/cli-selection.png" alt="Pixcode CLI selection" width="420" /> | <img src="public/screenshots/tools-modal.png" alt="Pixcode tools and MCP modal" width="420" /> |
+| New session | Mobile | Public link |
+| --- | --- | --- |
+| <img src="docs/screenshots/cli-selection.png" alt="Choosing a coding CLI for a new agent session" width="300" /> | <img src="docs/screenshots/mobile-chat.png" alt="Agent session on a phone with touch keys" width="220" /> | <img src="docs/screenshots/remote-share.png" alt="Public link dialog with tunnel providers" width="300" /> |
 
 ## Core Features
 
-### Multi-CLI agent workspace
+### Multi-CLI agent sessions
 
-Pixcode gives every supported coding CLI a shared workspace without hiding the
-provider-native behavior. You can connect the providers you already use and move
-between them from the same project.
+Every supported coding CLI runs as a first-class terminal session, with the
+provider's own TUI and behavior intact.
 
-- Claude Code
-- Cursor CLI
-- OpenAI Codex
-- Gemini CLI
-- Qwen Code
-- OpenCode
+- Claude Code · Codex · Devin · Gemini CLI · Qwen Code · OpenCode · Grok CLI
+- New-session picker shows which CLIs are installed and offers one-line
+  installers for the missing ones.
+- Sessions live on the server and survive browser refreshes and reconnects.
+- Presence strip shows who else is working; session tabs carry unread-output
+  markers.
+- Broadcast one prompt to several running sessions at once.
 
-Provider panels cover auth state, install checks, CLI versions, model choices,
-MCP support, and session history. When an agent is thinking, running tools,
-waiting for approval, or writing output, the UI keeps visible processing state
-instead of leaving the screen feeling frozen.
+### Automations
 
-### Chat built for development work
+Event-driven background agent runs defined as Markdown files in
+`$HARPY_HOME/automations/<ws-hash>/*.md` — the differentiator: **triggers
+are cheap and local, so an idle workspace burns zero tokens.**
 
-Pixcode chat is project-aware and designed for long-running coding sessions.
-
-- Fixed bottom composer on chat/project screens.
-- Session history per provider and project.
-- Default, plan, and run-style modes where supported.
-- Slash-command friendly input.
-- Tool output rendering for plans, file operations, command output, and provider
-  status events.
-- Telegram and browser/desktop notifications when work finishes, fails, or needs
-  attention.
-
-### Files, shell, and source control
-
-The side panels are built around the way coding agents change projects.
-
-- Files panel with detailed and compact views.
-- File open/edit flows that preserve the main chat or orchestration surface.
-- Shell panel with split/full behavior on desktop and mobile-safe behavior on
-  smaller screens.
-- Source Control panel for Git status, diffs, branches, commits, and changed
-  files when a project is a Git repository.
-- Local change tracking for projects that are not Git repositories.
-
-### Command Center for changed files
-
-Command Center watches what changes while agents work. It can track Git changes
-or local filesystem changes, show the changed file list next to the active chat,
-highlight changed items, and open the edited file at the relevant location.
-
-This is meant to answer the practical question: "What did the agent just touch?"
-
-### Multi-agent orchestration
-
-Pixcode can run structured agent workflows instead of sending every prompt to one
-agent.
-
-Built-in workflow styles include:
-
-- Agent Team: split a job across implementation, review, docs, testing, or
-  custom roles.
-- Sequential Handoff: pass compact context from one stage to the next.
-- Multi-model Review: compare provider/model opinions on the same code or plan.
-- Decision Debate: make multiple agents argue approaches before acting.
-
-Orchestration controls include:
-
-- per-agent provider and model selection,
-- custom labels, roles, and instructions,
-- duplicate providers when multiple workers should use the same CLI,
-- fallback CLI selection for failed steps,
-- run preview before execution,
-- streamed step output and final report,
-- resizable setup/output panes.
-
-### Background orchestration
-
-Pixcode includes a project-aware orchestration control plane for background
-agent work. It runs inside the current Pixcode instance, understands the active
-project context, and can route bounded tasks to Claude Code, Codex, Cursor,
-Gemini, Qwen, or OpenCode through terminal-first CLI adapters.
-
-Orchestration controls include:
-
-- project-scoped task context,
-- provider/model routing,
-- streamed task status and artifacts,
-- workflow run coordination,
-- background checks and previews,
-- authenticated local APIs under `/api/orchestration`.
-
-### API-first automation
-
-Pixcode's frontend uses the same backend control plane exposed to external
-automation. Generate a `px_` API key and call the REST/WebSocket APIs from your
-own tools, scripts, CI, dashboards, or Telegram bridge.
-
-List projects:
-
-```bash
-curl http://localhost:3001/api/projects \
-  -H "Authorization: Bearer px_your_key_here"
+```markdown
+---
+name: lint-watch
+on: fs                        # fs | cron | webhook | session-end
+paths: ["src/**/*.js"]        # fs triggers only
+schedule: "0 3 * * 1"         # cron triggers (or "every 30m")
+gate: npx eslint --quiet      # exit 0 = nothing to do → no agent spawns
+agent: codex                  # any installed CLI adapter
+isolated: true                # run inside a detached git worktree
+cooldown: 300                 # seconds between runs
+---
+A lint failure appeared in {files}. Fix it and report the diff.
 ```
 
-Run a provider task:
+- **Gate-first design:** the `gate` command runs locally (60s cap). Only a
+  nonzero exit spawns the agent — a quiet repo never calls an LLM.
+- **Triggers:** file watcher (reuses the live-sync watcher, debounced),
+  cron/`every N` schedules, inbound HMAC webhooks at `/api/hooks/<slug>`
+  (pair with the public link for GitHub/Linear events), and session-end.
+- **Isolation:** `isolated: true` runs the agent in a detached git worktree
+  under `~/.harpy/worktrees/`, cleaned up when the session ends or swept at
+  boot — background runs never touch your working tree.
+- **Safety:** per-automation cooldown, one-at-a-time runs, a global
+  concurrency cap, and automation sessions never trigger other automations.
+- Runs appear as normal sessions in the Agents panel (watchable, stoppable),
+  are recorded in the activity log and in run history, and can be managed
+  from **Settings → Automations** or edited as plain files on disk.
 
-```bash
-curl http://localhost:3001/api/agent \
-  -H "Authorization: Bearer px_your_key_here" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "provider": "codex",
-    "projectPath": "/home/me/project",
-    "message": "Review the current diff and list risky changes.",
-    "stream": false
-  }'
-```
+### Memory and handoffs
 
-Preview an orchestration workflow:
+Each workspace gets a `.harpy/` directory agents can read and write:
 
-```bash
-curl http://localhost:3001/api/orchestration/workflows/agent_team/preview \
-  -H "Authorization: Bearer px_your_key_here" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "metadata": {
-      "agents": [
-        { "adapterId": "codex", "label": "Backend", "role": "backend" },
-        { "adapterId": "opencode", "label": "Reviewer", "role": "review" }
-      ]
-    }
-  }'
-```
+- `MEMORY.md` holds durable facts — when a session ends, a short background CLI
+  run distills what is worth remembering.
+- Handoff snapshots let a new session pick up where the last one stopped.
 
-Legacy `ck_` keys remain accepted for older installations, but `px_` is the
-current prefix.
+### Files, editor, and shell
 
-OpenAPI reference: [`public/openapi.yaml`](public/openapi.yaml)
+- Explorer tree with live filesystem sync — changes from any side appear
+  instantly.
+- CodeMirror editor with save and diff views.
+- xterm.js terminal panel with tabs, search, and resize — on touch devices you
+  get drag scrolling and an extra-keys tray (Ctrl, arrows, paste).
+- Command palette search (`Ctrl+P`) across files and actions.
 
-### Telegram, notifications, and remote control
+### Source control
 
-Pixcode can pair a Telegram chat with your account so completed tasks, failed
-runs, and action-required states can reach you outside the browser. The goal is
-not just a final notification: the Telegram bridge is a control surface for
-remote prompts, provider/session selection, and long-running work.
+- Git panel for status, diffs, branches, and commits.
+- GitHub sign-in built in: web OAuth (auto-bootstrapped app manifest), device
+  flow, or a manual PAT.
 
-Notification surfaces include:
+### Public link
 
-- in-app alerts,
-- browser/desktop notifications where the platform allows them,
-- Telegram task notifications,
-- update notices and release notes.
+Expose the daemon on a public HTTPS URL from Settings → Public link, or with
+`harpy share`. Backed by bore.dk, Cloudflare quick tunnels, a self-hosted sish
+relay, ngrok, or zrok. A supervisor respawns the tunnel if it drops, and bore.dk
+sign-in works headless — approve it from your phone.
 
-### Theme system
+### Multi-user access
 
-Pixcode has a real appearance system instead of one fixed blue/navy palette.
+- First-run setup creates the owner account; admins can add members.
+- Per-user allowlists for projects and agents, disable/delete revokes live.
+- Per-user CLI environment variables and optional private CLI home directories.
+- `hp_` API keys for automation authenticate both the REST routes and the
+  multiplexed WebSocket.
 
-- Dark and light modes.
-- Ready-made accent palettes, including emerald and VS Code-like options.
-- Custom accent colors for dark and light themes.
-- Token-based styling for focus rings, active controls, buttons, navigation, and
-  panels.
+### Notifications
 
-### MCP and plugins
+- In-app and browser notifications when an agent session finishes or writes a
+  handoff.
+- Optional outbound webhook (ntfy.sh, Discord, or any URL) via
+  `harpy settings set webhook <url>`.
 
-Pixcode includes extension points for local workflows:
+### Extras
 
-- MCP server management for supported providers.
-- Provider-specific auth, MCP, and sessions panels.
-- Plugin loading with optional frontend tabs and backend services.
-- Local settings for API keys, base URLs, model catalogs, and provider install
-  state.
+- Activity log per workspace (fs ops, Git, session lifecycles).
+- Skill manager — install SKILL.md collections from a git repo into an agent's
+  skills directory.
+- Dark and light themes; UI in 9 languages.
+- PWA service worker for installable, offline-shell behavior on mobile.
+- Self-update channel: `harpy update` checks npm and GitHub releases.
 
 ## Installation
 
 ### Requirements
 
 - Node.js 22 or newer.
-- The provider CLIs you want to use, installed and authenticated separately when
-  required.
+- The provider CLIs you want to use, installed and authenticated separately.
 
 ### Run with npx
 
 ```bash
-npx @pixelbyte-software/pixcode
+npx harpy-run
 ```
 
 Open:
@@ -267,8 +190,8 @@ http://localhost:3001
 ### Install globally
 
 ```bash
-npm install -g @pixelbyte-software/pixcode
-pixcode
+npm install -g harpy-run
+harpy
 ```
 
 ### Desktop installers
@@ -279,24 +202,24 @@ Download desktop builds from GitHub Releases:
 - macOS: `.dmg`
 - Linux: AppImage or package asset, depending on the release
 
-Releases: <https://github.com/alicomert/pixcode/releases/latest>
+Releases: <https://github.com/harpy-run/harpy/releases/latest>
 
-#### macOS Gatekeeper: "Pixcode is damaged"
+#### macOS Gatekeeper: "Harpy is damaged"
 
-Current macOS desktop builds can be unsigned. If macOS says `Pixcode is damaged
+Current macOS desktop builds can be unsigned. If macOS says `Harpy is damaged
 and can't be opened. You should move it to the Trash`, first make sure the DMG
-came from the official Pixcode GitHub Releases page, then:
+came from the official Harpy GitHub Releases page, then:
 
-1. Open the DMG and drag `Pixcode.app` into `/Applications`.
+1. Open the DMG and drag `Harpy.app` into `/Applications`.
 2. Double-click `Fix Gatekeeper.command` inside the mounted DMG.
-3. Pixcode removes the quarantine flag from `/Applications/Pixcode.app` and can
+3. Harpy removes the quarantine flag from `/Applications/Harpy.app` and can
    open normally.
 
 Manual fallback:
 
 ```bash
-xattr -dr com.apple.quarantine "/Applications/Pixcode.app"
-open "/Applications/Pixcode.app"
+xattr -dr com.apple.quarantine "/Applications/Harpy.app"
+open "/Applications/Harpy.app"
 ```
 
 ### Background server and autostart
@@ -310,37 +233,42 @@ macOS, and the user Startup folder on Windows. No extra runtime dependency is
 installed.
 
 ```bash
-pixcode daemon install --port 3001   # enable login autostart and start now
-pixcode daemon status                # inspect PID, port and autostart state
-pixcode daemon logs                  # inspect the background server log
-pixcode daemon restart               # restart without changing the port
-pixcode daemon disable               # stop and remove autostart
+harpy daemon install --port 3001   # enable login autostart and start now
+harpy daemon status                # inspect PID, port and autostart state
+harpy daemon logs                  # inspect the background server log
+harpy daemon restart               # restart without changing the port
+harpy daemon disable               # stop and remove autostart
 ```
 
 Run in the foreground when developing:
 
 ```bash
-pixcode start --port 3001
+harpy start --port 3001
 ```
 
 ### Ports
 
-- Installed backend and bundled frontend: `PORT`/`PIXCODE_PORT`, default `3001`.
+- Installed backend and bundled frontend: `PORT`/`HARPY_PORT`, default `3001`.
 - Vite-only frontend development: `5199` (proxies API/WebSocket requests to the backend).
 
-For normal installed usage, think in terms of one port: `3001`. Port `5173` is
-only for separate Vite frontend development.
+For normal installed usage, think in terms of one port: `3001`.
+
+### Upgrading from Pixcode
+
+Harpy is the renamed Pixcode. Existing installs keep their data with a one-time
+manual rename before upgrading: `mv ~/.pixcode ~/.harpy` and rename
+`pixcode-projects/` to `harpy-projects/` (or point `HARPY_PROJECTS` at it).
+`PIXCODE_*` env vars, `px_` API keys, and `pixcode.service` units are no longer
+read — recreate keys and run `harpy daemon install` after upgrading.
 
 ## First Run
 
-1. Open Pixcode and create or sign in to the local user account.
-2. Add the project folders you want to manage.
-3. Connect the CLI providers you actually use.
-4. Open Settings and check provider install/auth/model status.
-5. Use orchestration if you want background workflow and review flows.
-6. Generate a `px_` API key for external automation.
-7. Pair Telegram if you want remote prompts and completion notifications.
-8. Pick your theme palette under Appearance.
+1. Open Harpy and set the owner password (≥ 6 characters).
+2. Pick or create the workspace you want to work in.
+3. Open a new agent session and pick a CLI — missing ones show an install
+   command you can run in place.
+4. Open Settings to manage users, API keys, skills, and notifications.
+5. Enable a public link if you want to reach the workspace from another device.
 
 ## Development
 
@@ -355,87 +283,53 @@ Important development notes:
 - `npm run dev` starts the Vite frontend on port `5199`; keep `npm start`
   running separately for API/WebSocket requests.
 - `npm start` runs the backend in the foreground on the stable port `3001`; use
-  `pixcode daemon install` when it should survive shell/browser closure.
+  `harpy daemon install` when it should survive shell/browser closure.
 - `npm run desktop:build` stages the bundled Node runtime and production server
   dependencies before Tauri creates the Windows, macOS, and Linux installers.
-- There is no unit test or typecheck script configured today. Use smoke scripts,
-  lint, build, and manual provider/API checks.
+- There is no unit test or typecheck script configured today. Use smoke scripts
+  (`scripts/smoke.mjs` against a running server), lint, build, and manual
+  provider/API checks.
 
 ## Repository Map
 
-- `src/` - Preact + Vite frontend.
-- `server/` - Node HTTP, WebSocket, CLI adapters, routes, auth, and daemon.
-- `server/modules/orchestration/` - multi-agent workflow engine and CLI adapters.
-- `server/modules/providers/` - provider auth, MCP, sessions, model and install
-  endpoints.
-- `shared/` - contracts shared by frontend and backend.
-- `public/openapi.yaml` - API reference shipped with the app.
-- `public/screenshots/` - README and product screenshots.
-- `public/llms.txt` and `public/llms-full.txt` - AI-discovery summaries.
-
-## Open Source Readiness
-
-Pixcode is prepared for public contribution with the basics contributors expect:
-
-- Clear README with purpose, install commands, screenshots, API examples, and
-  architecture map.
-- MIT-licensed — see [`LICENSE`](LICENSE). Free for commercial and personal use.
-- Contribution guide in [`CONTRIBUTING.md`](CONTRIBUTING.md).
-- Code of conduct in [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
-- Security policy in [`SECURITY.md`](SECURITY.md).
-- GitHub issue templates for bug reports, feature requests, and good first
-  issues.
-- Releases and version tags published through GitHub Releases.
-- Static website and documentation under [`public/`](public).
-
-Good starter work should be labeled `good first issue` on GitHub. The repository
-also includes a good-first-issue template so small, scoped tasks can be filed
-without losing context.
+- `src/` - Preact + Vite frontend (Tailwind v4, `@preact/signals` state).
+- `server/` - Node HTTP/WebSocket backend and the `harpy` CLI.
+- `server/channels/` - one file per WS channel (`fs`, `git`, `pty`, `agent`,
+  `project`, `auth`, `activity`, `share`, `system`).
+- `server/agents/adapters/` - CLI adapters, one per supported coding agent.
+- `src-tauri/` - Tauri 2 desktop shell.
+- `public/` - static assets and the service worker.
+- `docs/` - design docs, translated READMEs, and product screenshots.
+- `scripts/` - standalone smoke/maintenance scripts.
 
 ## Security Model
 
-- Pixcode is self-hosted. Treat it like a local control plane for your machine.
+- Harpy is self-hosted. Treat it like a local control plane for your machine.
 - Use strong local account credentials when exposing it on a network.
-- Put public-server deployments behind a trusted reverse proxy, VPN, or firewall.
+- Put public-server deployments behind a trusted reverse proxy, VPN, or
+  firewall — or use the built-in public-link tunnel deliberately.
 - API keys are intended for automation. Rotate them if they are exposed.
-- Provider secrets are masked in APIs and UI responses where possible.
+- Provider secrets are write-only in APIs and UI responses where possible.
 - Do not publish logs that contain provider tokens, session output, or private
   project paths.
+
+See [`SECURITY.md`](SECURITY.md) for vulnerability reporting.
 
 ## Contributing
 
 Read [`CONTRIBUTING.md`](CONTRIBUTING.md) before opening a pull request. Keep
-changes scoped, run the verification commands above, and include screenshots or
-short recordings for UI work when possible.
+changes scoped, run `npm run lint` and `npm run build`, and include screenshots
+or short recordings for UI work when possible.
 
 For community behavior expectations, read
-[`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md). For private vulnerability reports,
-read [`SECURITY.md`](SECURITY.md).
-
-## Cloud (Coming Soon)
-
-Pixcode Cloud will offer a fully managed SaaS experience — no server setup,
-no Docker, no daemon configuration. Connect your GitHub repos, pick an AI
-coding agent, and let it work in an isolated container that we manage for you.
-
-- **BYOK** (Bring Your Own Key) or use our managed API pool
-- Isolated Docker containers per project
-- Team collaboration and shared workspaces
-- Cost analytics and token usage dashboards
-- Workflow marketplace with pre-built orchestration templates
-
-Join the discussion or request early access in
-[GitHub Discussions](https://github.com/alicomert/pixcode/discussions).
+[`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
 
 ## Links
 
-- Website: <https://alicomert.github.io/pixcode/landing.html>
-- npm: <https://www.npmjs.com/package/@pixelbyte-software/pixcode>
-- GitHub: <https://github.com/alicomert/pixcode>
-- Releases: <https://github.com/alicomert/pixcode/releases/latest>
-- API docs: [`public/openapi.yaml`](public/openapi.yaml)
-- Static docs: [`public/docs.html`](public/docs.html), [`public/features.html`](public/features.html), [`public/orchestration.html`](public/orchestration.html), [`public/api-automation.html`](public/api-automation.html)
-- AI discovery: [`public/llms.txt`](public/llms.txt), [`public/llms-full.txt`](public/llms-full.txt)
+- Website: <https://harpy.run>
+- npm: <https://www.npmjs.com/package/harpy-run>
+- GitHub: <https://github.com/harpy-run/harpy>
+- Releases: <https://github.com/harpy-run/harpy/releases/latest>
 
-Pixcode is an independent open-source project and is not affiliated with OpenAI,
-Anthropic, Google, Cursor, Alibaba/Qwen, or OpenCode.
+Harpy is an independent open-source project and is not affiliated with OpenAI,
+Anthropic, Google, Cursor, Alibaba/Qwen, xAI, or OpenCode.
