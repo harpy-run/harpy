@@ -3,15 +3,17 @@ import { httpError } from '../util/http.js'
 import { enhancedEnv } from '../util/env.js'
 import { cliEnvFor } from '../cli-env.js'
 import { workspaceCwd, workspaceRoot } from '../workspace.js'
-import { accessAlive, accessFor } from '../auth.js'
+import { accessAlive, requireAdmin } from '../auth.js'
 import { recordActivity } from '../activity.js'
 
 const shells = new Map()
 let counter = 0
 const MAX_HISTORY_BYTES = 2 * 1024 * 1024
 
-// Terminals belong to the account, not the tab: reopening Pixcode on another
-// device reattaches to the same running shells.
+// Terminals belong to the account, not the tab: reopening Harpy on another
+// device reattaches to the same running shells. The whole channel is
+// admin-only — a PTY is a daemon-user shell, and a member's project
+// allowlist was never meant to grant host-level command execution.
 function ownerKey(ctx) {
   return String(ctx?.principal?.sub || 'owner')
 }
@@ -28,10 +30,9 @@ function dimensions(cols, rows) {
 }
 
 function getOwnedShell(ctx, id) {
+  requireAdmin(ctx)
   const shell = shells.get(id)
   if (!shell || shell.owner !== ownerKey(ctx)) throw httpError(404, 'terminal not found')
-  // Terminal ownership does not bypass mid-session account revocation.
-  if (!accessFor(ctx)) throw httpError(401, 'session revoked')
   shell.subscribers.add(ctx)
   return shell
 }
@@ -39,6 +40,7 @@ function getOwnedShell(ctx, id) {
 export const ptyChannel = {
   ops: {
     async create(ctx, { cols = 80, rows = 24, cwd, workspace: requestedWorkspace, command } = {}) {
+      requireAdmin(ctx)
       const id = `pty_${++counter}`
       const size = dimensions(cols, rows)
       const workspacePath = workspaceRoot(requestedWorkspace, ctx)
@@ -74,7 +76,7 @@ export const ptyChannel = {
     },
 
     list(ctx, { workspace } = {}) {
-      if (!accessFor(ctx)) throw httpError(401, 'session revoked')
+      requireAdmin(ctx)
       const requested = workspace ? workspaceRoot(workspace, ctx) : ''
       return [...shells.entries()]
         .filter(([, shell]) => shell.owner === ownerKey(ctx) && (!requested || shell.workspace === requested))
