@@ -1,29 +1,54 @@
 {
-  "name": "@pixelbyte-software/pixcode",
+  "name": "harpy-run",
   "version": "2.6.3",
-  "description": "Lightweight self-hosted AI coding workbench — web, mobile and desktop",
+  "description": "Self-hosted control plane for AI coding agents — web, mobile and desktop",
+  "keywords": [
+    "ai",
+    "coding-agents",
+    "claude-code",
+    "codex",
+    "gemini-cli",
+    "opencode",
+    "qwen",
+    "grok",
+    "devin",
+    "self-hosted",
+    "developer-tools",
+    "terminal",
+    "websocket",
+    "workbench",
+    "llm",
+    "tauri",
+    "preact"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/alicomert/pixcode.git"
+    "url": "git+https://github.com/harpy-run/harpy.git"
   },
-  "homepage": "https://github.com/alicomert/pixcode#readme",
+  "homepage": "https://harpy.run",
   "bugs": {
-    "url": "https://github.com/alicomert/pixcode/issues"
+    "url": "https://github.com/harpy-run/harpy/issues"
   },
-  "author": "Ali Comert and Pixcode Contributors",
+  "funding": "https://buymeacoffee.com/alicomert",
+  "author": "Ali Comert and Harpy Contributors",
   "type": "module",
   "engines": {
     "node": ">=22"
   },
+  "publishConfig": {
+    "access": "public"
+  },
+  "preferGlobal": true,
   "bin": {
-    "pixcode": "server/cli.js"
+    "harpy": "server/cli.js"
   },
   "files": [
     "dist",
     "server",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "SECURITY.md"
   ],
   "scripts": {
     "dev": "vite",
