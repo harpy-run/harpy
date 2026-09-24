@@ -155,7 +155,7 @@ const PROVIDERS = {
             const bin = await ensureBinary('bore',
                 `https://bore.dk/downloads/latest/bore-${plat}-${arch}${exeExt}`);
             if (!boreSignedIn()) throw new Error('bore.dk sign-in required first');
-            return { cmd: bin, args: ['up', String(port)], urlRe: /https:\/\/[\w.-]+\.bore\.dk/ };
+            return { cmd: bin, args: ['up', String(port)], urlRe: /https:\/\/[\w.-]+\.bore\.dk/, input: 'y\n' };
         },
         resolve({ port }) {
             const rt = boreRuntime();
@@ -304,7 +304,10 @@ export async function shareEnable(provider, opts = {}, { port = config.port } = 
         // Register-and-exit providers (bore): the CLI claims the tunnel and
         // exits; resolve() maps the provider's own runtime state to the pid
         // that actually holds the tunnel open plus the assigned URL.
-        const res = spawnSync(spec.cmd, spec.args, { encoding: 'utf8', timeout: 30000 });
+        // `input` feeds stdin: bore's "reuse reserved namespace?" prompt would
+        // otherwise hang the detached CLI until the timeout kills it, and the
+        // supervisor's retry then spawns yet another bore daemon (flap loop).
+        const res = spawnSync(spec.cmd, spec.args, { encoding: 'utf8', timeout: 30000, input: spec.input || '' });
         const out = `${res.stdout || ''}${res.stderr || ''}`;
         fs.appendFileSync(tunnelLog(), out);
         if (res.error) throw new Error(`${provider} failed: ${res.error.message}`);
