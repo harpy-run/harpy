@@ -30,7 +30,11 @@ typecheck script — `npm run lint` is the only automated check.
 - `harpy update [--check|--yes]` — checks npm registry **and** GitHub
   releases/tags, applies through the install channel (`npm i -g` for global
   installs, `git pull --ff-only` + rebuild for checkouts), then restarts the
-  daemon. `server/update.js` holds the logic; `server/cli-ui.js` is the
+  daemon **and verifies `/api/health` answers before reporting success**.
+  `server/update.js` holds the logic: a lockdir at
+  `$HARPY_HOME/daemon/update.lock` serializes concurrent updaters and
+  `update-state.json` records the phase (`install`/`restart`/`done`/`failed`)
+  for the UI's `system.updateStatus` poll; `server/cli-ui.js` is the
   dependency-free prompt/ANSI layer (degrades cleanly without a TTY).
 - `npm run dev` — Vite frontend only, port 5199. **It proxies `/api` and `/ws` to
   the backend at `PORT||HARPY_PORT||3001`, so you must also run `npm start` or API/WS will fail.**
