@@ -1,6 +1,6 @@
 [package]
 name = "harpy"
-version = "2.6.3"
+version = "2.6.4"
 description = "Harpy desktop shell"
 authors = ["Ali Comert and Harpy Contributors"]
 edition = "2021"

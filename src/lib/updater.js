@@ -3,7 +3,7 @@
 // executed by the app. Users can review the GitHub release before installing
 // an update, which also keeps the checker safe when a network is intercepted.
 
-export const CURRENT_VERSION = "2.6.3"
+export const CURRENT_VERSION = "2.6.4"
 export const RELEASE_URL = 'https://github.com/harpy-run/harpy/releases/latest'
 const RELEASE_API_URL = 'https://api.github.com/repos/harpy-run/harpy/releases/latest'
 
