@@ -340,6 +340,7 @@
   "update.applying": "Updating… the daemon restarts itself, the page reloads when it's back.",
   "update.serverHint": "Installed via {mode} — the daemon restarts automatically after updating.",
   "update.dismiss": "Close update dialog",
+  "update.stalled": "The daemon did not come back — run `harpy daemon status` on the host to check the update.",
   "settings.scrollSpeed": "Scroll sensitivity",
   "settings.scrollSpeedHint": "Multiplier for touch drag scrolling in terminals.",
   "terminal.scrollUp": "Scroll up",

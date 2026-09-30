@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { openSync, mkdirSync } from 'node:fs'
+import { openSync, mkdirSync, readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { requireAdmin } from '../auth.js'
@@ -53,6 +53,20 @@ export const systemChannel = {
       })
       child.unref()
       return { started: true, supervisor: 'detached', log: updateLog() }
+    },
+    // The detached updater records phases in update-state.json because the
+    // socket dies mid-restart — clients poll this after reconnecting. `since`
+    // (ms epoch) filters out a previous run's state file.
+    updateStatus: (ctx, args = {}) => {
+      requireAdmin(ctx)
+      try {
+        const state = JSON.parse(readFileSync(path.join(config.dataDir, 'daemon', 'update-state.json'), 'utf8'))
+        const at = new Date(state?.at || 0).getTime()
+        if (!Number.isFinite(at) || at < Number(args.since || 0) - 2_000 || Date.now() - at > 30 * 60_000) return { active: false }
+        return { active: true, ...state }
+      } catch {
+        return { active: false }
+      }
     },
   },
 }

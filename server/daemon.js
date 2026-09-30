@@ -85,6 +85,18 @@ async function waitForListening(port, timeout = 5_000) {
   return status
 }
 
+// A listening socket can outlive the killed process by a beat (and under a
+// supervisor the port may be re-bound almost immediately). Returning while
+// the port is still bound makes a follow-up startDaemon report "port already
+// in use" and skip the start entirely — that exact interleave is what left
+// past updates with a dead daemon.
+async function waitForPortFree(port, timeout = 4_000) {
+  const deadline = Date.now() + timeout
+  while (await probePort(port) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+}
+
 // Kills harpy daemon processes still bound to the port after the supervised
 // stop — earlier builds could leave a detached child behind that kept the port
 // and made every subsequent restart report "port already in use".
@@ -216,7 +228,15 @@ export function runServerForeground({ port = config.port, workspace } = {}) {
 
 export async function startDaemon({ port = config.port, workspace } = {}) {
   const normalizedPort = normalizePort(port)
-  const current = await daemonStatus({ port: normalizedPort })
+  let current = await daemonStatus({ port: normalizedPort })
+  // A predecessor that just stopped can leave the socket bound for a few
+  // hundred ms — absorb that before declaring the port taken. A foreign
+  // process keeps holding it and still gets refused below.
+  let probeRetries = 25
+  while (!current.running && current.listening && probeRetries-- > 0) {
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    current = await daemonStatus({ port: normalizedPort })
+  }
   if (current.running) return { ...current, started: false, message: 'daemon already running' }
   if (current.listening) return { ...current, started: false, message: `port ${normalizedPort} is already in use` }
 
@@ -256,6 +276,7 @@ export async function stopDaemon() {
   const unit = systemdUnit()
   if (unit) {
     try {
+      const port = Number(readState().port) || config.port
       execFileSync('systemctl', [...unit, 'stop', SERVICE_NAME], { stdio: 'ignore' })
       const deadline = Date.now() + 4_000
       let pid = readPid()
@@ -263,8 +284,9 @@ export async function stopDaemon() {
         await new Promise((resolve) => setTimeout(resolve, 100))
         pid = readPid()
       }
-      reapOrphanedListeners(Number(readState().port) || config.port)
+      reapOrphanedListeners(port)
       removeState()
+      await waitForPortFree(port)
       return { stopped: true }
     } catch { /* fall through to the direct kill when systemctl fails */ }
   }
@@ -286,8 +308,10 @@ export async function stopDaemon() {
       else process.kill(pid, 'SIGKILL')
     } catch { void 0 }
   }
-  reapOrphanedListeners(Number(readState().port) || config.port)
+  const port = Number(readState().port) || config.port
+  reapOrphanedListeners(port)
   removeState(pid)
+  await waitForPortFree(port)
   return { stopped: true, pid }
 }
 

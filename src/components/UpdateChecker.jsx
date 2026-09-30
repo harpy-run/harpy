@@ -61,6 +61,7 @@ export function UpdateChecker({ detailed = false }) {
   const [open, setOpen] = useState(false)
   const [installMode, setInstallMode] = useState('')
   const [updating, setUpdating] = useState(false)
+  const [stalled, setStalled] = useState(false)
   const reloadPoll = useRef(null)
   useEscape(open && !updating, () => setOpen(false))
 
@@ -90,6 +91,13 @@ export function UpdateChecker({ detailed = false }) {
   async function updateNow() {
     if (updating) return
     setUpdating(true)
+    setStalled(false)
+    const since = Date.now()
+    const fail = () => {
+      window.clearInterval(reloadPoll.current)
+      setUpdating(false)
+      setStalled(true)
+    }
     try {
       await ws.request('system', 'updateApply')
       const deadline = Date.now() + 6 * 60_000 // npm/git update + rebuild can take minutes
@@ -99,11 +107,14 @@ export function UpdateChecker({ detailed = false }) {
           const info = await res.json()
           if (info?.version && info.version !== CURRENT_VERSION) { location.reload(); return }
         } catch { /* daemon mid-restart — keep polling */ }
-        if (Date.now() > deadline) {
-          window.clearInterval(reloadPoll.current)
-          setUpdating(false)
-          setState((current) => ({ ...current, error: 'timeout' }))
-        }
+        try {
+          // The updater records phases in update-state.json — the socket dies
+          // mid-restart, so this only answers once the new daemon is back.
+          const status = await ws.request('system', 'updateStatus', { since })
+          if (status?.phase === 'done') { location.reload(); return }
+          if (status?.phase === 'failed') { fail(); return }
+        } catch { /* socket still reconnecting */ }
+        if (Date.now() > deadline) fail()
       }, 4000)
     } catch {
       setUpdating(false)
@@ -145,6 +156,7 @@ export function UpdateChecker({ detailed = false }) {
         <h2 id="harpy-update-title">{t('update.available', { version: release.version })}</h2>
         <ReleaseNotes notes={release.notes} />
         {updating && <p class="update-progress"><vscode-progress-ring /> {t('update.applying')}</p>}
+        {stalled && !updating && <p class="update-error">{t('update.stalled')}</p>}
         <div class="update-actions">
           {canSelfUpdate && !updating && <vscode-button onClick={updateNow}>{t('update.updateNow', { mode: installMode })}</vscode-button>}
           <a class="update-release-link" href={safeReleaseUrl(release.releaseUrl)} target="_blank" rel="noopener noreferrer">{t('update.releaseNotes')}</a>

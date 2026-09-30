@@ -489,7 +489,7 @@ async function settingsCommand(args) {
 // --- update ------------------------------------------------------------------
 
 async function updateFlow(options) {
-  const { checkForUpdate, applyUpdate, installMode, RELEASE_PAGE } = await import('./update.js')
+  const { checkForUpdate, applyUpdate, installMode, writeUpdateState, RELEASE_PAGE } = await import('./update.js')
   const t = translator(cliLang())
   const label = (s) => s.padEnd(10)
   const info = await checkForUpdate()
@@ -501,6 +501,9 @@ async function updateFlow(options) {
   ])
   console.log('')
   if (!info.updateAvailable) {
+    // Tells a UI-triggered update (detached `harpy update --yes`) there's
+    // nothing to restart for — otherwise the client waits out its timeout.
+    writeUpdateState({ phase: 'done', version: info.current, skipped: true })
     console.log(`  ${c.ok('✓')} ${t('updFresh')}`)
     return
   }

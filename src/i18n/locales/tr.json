@@ -340,6 +340,7 @@
   "update.applying": "Güncelleniyor… daemon kendini yeniden başlatır, sayfa dönünce yenilenir.",
   "update.serverHint": "{mode} ile kuruldu — daemon güncelleme sonrası kendini yeniden başlatır.",
   "update.dismiss": "Güncelleme penceresini kapat",
+  "update.stalled": "Daemon geri dönmedi — sunucuda `harpy daemon status` ile güncellemeyi kontrol edin.",
   "settings.scrollSpeed": "Kaydırma hassasiyeti",
   "settings.scrollSpeedHint": "Terminallerde dokunarak kaydırma hızı çarpanı.",
   "terminal.scrollUp": "Yukarı kaydır",
