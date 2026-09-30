@@ -8,8 +8,8 @@ import { VERSION } from './config.js'
 // from either. Which channel *applies* the update depends on how this copy
 // was installed (global npm package vs git checkout).
 
-const NPM_PACKAGE = '@harpy-run/harpy'
-const NPM_LATEST_URL = 'https://registry.npmjs.org/@harpy-run%2Fharpy/latest'
+const NPM_PACKAGE = 'harpy-run'
+const NPM_LATEST_URL = 'https://registry.npmjs.org/harpy-run/latest'
 const REPO = 'harpy-run/harpy'
 const RELEASE_API = `https://api.github.com/repos/${REPO}/releases/latest`
 const TAGS_API = `https://api.github.com/repos/${REPO}/tags?per_page=30`

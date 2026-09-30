@@ -8,7 +8,7 @@
     from a browser, a phone, or the desktop app.
   </p>
   <p>
-    <a href="https://www.npmjs.com/package/@harpy-run/harpy"><img src="https://img.shields.io/npm/v/@harpy-run/harpy?style=for-the-badge&color=10b981" alt="npm version" /></a>
+    <a href="https://www.npmjs.com/package/harpy-run"><img src="https://img.shields.io/npm/v/harpy-run?style=for-the-badge&color=10b981" alt="npm version" /></a>
     <a href="https://github.com/harpy-run/harpy/releases/latest"><img src="https://img.shields.io/github/v/release/harpy-run/harpy?style=for-the-badge&color=0ea5e9" alt="latest release" /></a>
     <img src="https://img.shields.io/badge/Node.js-22%2B-3c873a?style=for-the-badge" alt="Node.js 22+" />
     <img src="https://img.shields.io/badge/Desktop-Windows%20%7C%20macOS%20%7C%20Linux-6366f1?style=for-the-badge" alt="desktop platforms" />
@@ -190,7 +190,7 @@ http://localhost:3001
 ### Install globally
 
 ```bash
-npm install -g @harpy-run/harpy
+npm install -g harpy-run
 harpy
 ```
 
@@ -327,7 +327,7 @@ For community behavior expectations, read
 ## Links
 
 - Website: <https://harpy.run>
-- npm: <https://www.npmjs.com/package/@harpy-run/harpy>
+- npm: <https://www.npmjs.com/package/harpy-run>
 - GitHub: <https://github.com/harpy-run/harpy>
 - Releases: <https://github.com/harpy-run/harpy/releases/latest>
 
