@@ -13,8 +13,11 @@ npm start        # backend on :3001, in a second terminal:
 npm run dev      # Vite frontend on :5199, proxies /api and /ws to :3001
 ```
 
-`node-pty` is a native dependency — on Linux you need a C++ toolchain
-(`build-essential` or equivalent) for `npm install` to succeed.
+The PTY backend is `@lydell/node-pty` — native binaries for Windows,
+macOS and Linux (x64/arm64) ship inside the npm tarball as per-platform
+optionalDependencies, so `npm install` needs no C++ toolchain. Do not
+install with `--omit=optional`/`--no-optional`: that skips the platform
+binary package and every terminal fails to spawn.
 
 ## Before you commit
 

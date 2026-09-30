@@ -8,8 +8,10 @@ typecheck script — `npm run lint` is the only automated check.
 
 ## Commands
 
-- `npm install` — `node-pty` (backend) is native; a C++
-  toolchain must be present or installs/builds fail.
+- `npm install` — the PTY backend is `@lydell/node-pty`, whose native
+  binaries ship inside the npm tarball as per-platform optionalDependencies
+  (win32/darwin/linux, x64/arm64). No install scripts, no C++ toolchain —
+  do not install with `--omit=optional` or terminals/agents break.
 - `npm start` (a.k.a. `npm run server`) — backend only, always on the stable
   publication port `3001`. For an isolated port use `node server/cli.js start
   --port N`; host is `0.0.0.0`; serves `dist/` if it exists, otherwise 404s on `/`.

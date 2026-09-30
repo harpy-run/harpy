@@ -28,6 +28,7 @@ import { automationChannel } from './channels/automation.channel.js'
 import { rigChannel } from './channels/rig.channel.js'
 import { automationRoutes, onFsChanged, sessionEnded, setAutomationNotifier, startScheduler } from './automations.js'
 import { registerFsListener } from './channels/fs.channel.js'
+import { getPty } from './util/pty.js'
 
 function allowLocalOrigin(origin) {
   if (!origin) return false
@@ -132,6 +133,9 @@ export function startServer(options = {}) {
     const onListening = () => {
       const displayHost = host === '0.0.0.0' ? 'localhost' : host
       console.log(`harpy v${VERSION} listening on http://${displayHost}:${activePort}`)
+      // Surface a broken PTY backend at boot — a missing native binary
+      // otherwise only shows up as a cryptic spawn error much later.
+      getPty().catch((error) => console.warn(`[pty] ${error.message}`))
       shareResume({ port: activePort })
       shareSupervise({ port: activePort })
     }

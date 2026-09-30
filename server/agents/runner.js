@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { promisify } from 'node:util'
-import pty from '@homebridge/node-pty-prebuilt-multiarch'
+import { spawnPty } from '../util/pty.js'
 import { getAdapter } from './adapter.js'
 import { config } from '../config.js'
 import { httpError } from '../util/http.js'
@@ -236,7 +236,7 @@ function nextSessionIndex(ctx, agent, currentWorkspace) {
 
 async function spawnTerm(session, args) {
   const AdapterClass = getAdapter(session.state.agent)
-  const term = pty.spawn(AdapterClass.cli, args, {
+  const term = await spawnPty(AdapterClass.cli, args, {
     name: 'xterm-256color',
     ...session.size,
     cwd: session.state.cwd,

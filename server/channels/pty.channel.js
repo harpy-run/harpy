@@ -1,4 +1,4 @@
-import pty from '@homebridge/node-pty-prebuilt-multiarch'
+import { spawnPty } from '../util/pty.js'
 import { httpError } from '../util/http.js'
 import { enhancedEnv } from '../util/env.js'
 import { cliEnvFor } from '../cli-env.js'
@@ -67,7 +67,7 @@ export const ptyChannel = {
       const id = `pty_${++counter}`
       const size = dimensions(cols, rows)
       const workspacePath = workspaceRoot(requestedWorkspace, ctx)
-      const term = pty.spawn(defaultShell(), [], {
+      const term = await spawnPty(defaultShell(), [], {
         name: 'xterm-256color',
         ...size,
         cwd: workspaceCwd(workspacePath, cwd, ctx),
