@@ -42,6 +42,9 @@ typecheck script — `npm run lint` is the only automated check.
 
 ## Desktop shell notes
 
+- Distribution is npm-only: `release.yml` creates a bare GitHub release (notes +
+  source archive) and publishes `@harpy-run/harpy`. Desktop installers are not
+  published; `npm run desktop:build` still produces a local shell from source.
 - The packaged app spawns a bundled Node server (`resource_dir()/harpy-runtime`,
   staged by `scripts/prepare-desktop-resources.mjs`). Its stdout/stderr and the
   shell's own spawn/exit/watchdog events go to `app_data_dir()/server.log` —

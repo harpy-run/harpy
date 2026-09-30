@@ -178,7 +178,7 @@ sign-in works headless — approve it from your phone.
 ### Run with npx
 
 ```bash
-npx harpy-run
+npx @harpy-run/harpy
 ```
 
 Open:
@@ -194,32 +194,13 @@ npm install -g @harpy-run/harpy
 harpy
 ```
 
-### Desktop installers
+### Desktop shell
 
-Download desktop builds from GitHub Releases:
-
-- Windows: `.exe`
-- macOS: `.dmg`
-- Linux: AppImage or package asset, depending on the release
-
-Releases: <https://github.com/harpy-run/harpy/releases/latest>
-
-#### macOS Gatekeeper: "Harpy is damaged"
-
-Current macOS desktop builds can be unsigned. If macOS says `Harpy is damaged
-and can't be opened. You should move it to the Trash`, first make sure the DMG
-came from the official Harpy GitHub Releases page, then:
-
-1. Open the DMG and drag `Harpy.app` into `/Applications`.
-2. Double-click `Fix Gatekeeper.command` inside the mounted DMG.
-3. Harpy removes the quarantine flag from `/Applications/Harpy.app` and can
-   open normally.
-
-Manual fallback:
+Distribution is npm-only — there are no published installers. A Tauri shell
+can still be built locally from source when a desktop window is wanted:
 
 ```bash
-xattr -dr com.apple.quarantine "/Applications/Harpy.app"
-open "/Applications/Harpy.app"
+npm run desktop:build
 ```
 
 ### Background server and autostart
@@ -285,7 +266,8 @@ Important development notes:
 - `npm start` runs the backend in the foreground on the stable port `3001`; use
   `harpy daemon install` when it should survive shell/browser closure.
 - `npm run desktop:build` stages the bundled Node runtime and production server
-  dependencies before Tauri creates the Windows, macOS, and Linux installers.
+  dependencies before Tauri creates a local desktop build (installers are no
+  longer published — npm is the only distribution channel).
 - There is no unit test or typecheck script configured today. Use smoke scripts
   (`scripts/smoke.mjs` against a running server), lint, build, and manual
   provider/API checks.

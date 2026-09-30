@@ -6,7 +6,7 @@ on:
       tag:
         description: 'Release tag to build'
         required: true
-        default: 'v2.0.7'
+        default: 'v2.6.4'
         type: string
   push:
     tags:
@@ -16,90 +16,9 @@ permissions:
   contents: write
 
 jobs:
-  desktop:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-22.04
-            # Keep linuxdeploy diagnostics visible in CI; AppImage failures
-            # otherwise collapse into an unhelpful generic bundler error.
-            args: '-v'
-          - os: windows-latest
-            args: ''
-          - os: macos-latest
-            args: ''
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.tag || github.ref }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      - name: Check release version
-        run: npm run check:version -- --tag "${{ inputs.tag || github.ref_name }}"
-      - run: npm run build
-      - name: Install Linux system dependencies
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf libfuse2
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # linuxdeploy is distributed as an AppImage. GitHub-hosted runners
-          # do not expose FUSE, so force AppImage tools to self-extract.
-          APPIMAGE_EXTRACT_AND_RUN: 1
-        with:
-          projectPath: .
-          tauriScript: npx --yes @tauri-apps/cli@2
-          tagName: ${{ inputs.tag || github.ref_name }}
-          releaseName: Harpy ${{ inputs.tag || github.ref_name }}
-          releaseBody: Automated desktop builds
-          # Keep the release private until every platform has uploaded its
-          # installer. The publish job below verifies the expected assets.
-          releaseDraft: true
-          prerelease: false
-          args: ${{ matrix.args }}
-
-  publish:
-    name: Publish verified release
-    needs: desktop
-    if: ${{ needs.desktop.result == 'success' }}
+  release:
+    name: Create release and publish npm package
     runs-on: ubuntu-22.04
-    permissions:
-      contents: write
-    steps:
-      - name: Verify desktop assets
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
-        run: |
-          set -euo pipefail
-          # GitHub's /releases/tags endpoint intentionally omits draft
-          # releases. Resolve the draft from the collection endpoint first.
-          release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100")"
-          release_id="$(jq -r --arg tag "$RELEASE_TAG" '.[] | select(.tag_name == $tag) | .id' <<<"$release_json" | head -n1)"
-          test -n "$release_id" && test "$release_id" != "null"
-          assets="$(jq -r '.assets[].name' <<<"$(gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}")")"
-          printf '%s\n' "$assets"
-          grep -Eiq '\.exe$' <<<"$assets"
-          grep -Eiq '\.dmg$' <<<"$assets"
-          grep -Eiq '\.AppImage$' <<<"$assets"
-          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${release_id}" -f draft=false -f make_latest=true >/dev/null
-
-  npm:
-    name: Publish npm package
-    needs: [desktop, publish]
-    if: ${{ needs.desktop.result == 'success' && needs.publish.result == 'success' }}
-    env:
-      NPM_RELEASE_TOKEN: ${{ secrets.NPM_TOKEN }}
-    runs-on: ubuntu-22.04
-    permissions:
-      contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -110,16 +29,40 @@ jobs:
           registry-url: https://registry.npmjs.org
           cache: npm
       - run: npm ci
-      - name: Check package and release versions
+      - name: Check release version
         run: npm run check:version -- --tag "${{ inputs.tag || github.ref_name }}"
       - run: npm run build
-      - name: Publish package
-        # Desktop releases must remain publishable when this optional secret
-        # is not configured. The package can be published later independently.
-        if: ${{ env.NPM_RELEASE_TOKEN != '' }}
-        run: npm publish --access public
+      # Distribution is npm-only — the GitHub release exists for release
+      # notes and the auto-attached source archives, not binaries.
+      - name: Create GitHub release
         env:
-          NODE_AUTH_TOKEN: ${{ env.NPM_RELEASE_TOKEN }}
-      - name: Skip npm publish when no token is configured
-        if: ${{ env.NPM_RELEASE_TOKEN == '' }}
-        run: echo "NPM_TOKEN is not configured; desktop release remains published."
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "release $RELEASE_TAG already exists — skipping"
+          else
+            gh release create "$RELEASE_TAG" \
+              --title "Harpy $RELEASE_TAG" \
+              --notes "Install: \`npm i -g @harpy-run/harpy\`" \
+              --generate-notes \
+              --latest
+          fi
+      - name: Publish package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${RELEASE_TAG#v}"
+          NAME="$(node -p "require('./package.json').name")"
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "NPM_TOKEN not configured — skipping npm publish"
+            exit 0
+          fi
+          if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
+            echo "$NAME@$VERSION already on npm — skipping"
+            exit 0
+          fi
+          npm publish --access public
