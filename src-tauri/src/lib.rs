@@ -108,10 +108,29 @@ pub fn run() {
         });
 }
 
+/// `resource_dir()`/`app_data_dir()` can arrive as verbatim `\\?\C:\…` paths
+/// on Windows. Passing one to `node.exe` as the script argument makes Node's
+/// `resolveMainPath` `realpathSync` it, which degenerates into an
+/// `EISDIR: lstat 'C:'` crash before cli.js ever runs. Strip the verbatim
+/// prefix from anything handed to the child process (a no-op elsewhere).
+fn spawn_safe_path(path: PathBuf) -> PathBuf {
+    let Some(raw) = path.to_str() else {
+        return path;
+    };
+    match raw.strip_prefix(r"\\?\") {
+        None => path,
+        // \\?\UNC\share\… keeps its share form after de-verbatimizing.
+        Some(rest) => match rest.strip_prefix(r"UNC\") {
+            Some(unc) => PathBuf::from(format!(r"\\{unc}")),
+            None => PathBuf::from(rest),
+        },
+    }
+}
+
 fn server_log_path<R: tauri::Runtime>(app: &AppHandle<R>) -> PathBuf {
     app.path()
         .app_data_dir()
-        .map(|dir| dir.join("server.log"))
+        .map(|dir| spawn_safe_path(dir).join("server.log"))
         .unwrap_or_else(|_| PathBuf::from("server.log"))
 }
 
@@ -184,13 +203,13 @@ fn watch_background_server(app: &AppHandle<tauri::Wry>) {
 /// Returns `false` when no bundled runtime exists (development mode), `true`
 /// once a runtime was found and a spawn was attempted.
 fn start_background_server<R: tauri::Runtime>(app: &AppHandle<R>) -> tauri::Result<bool> {
-    let resource = app.path().resource_dir()?;
+    let resource = spawn_safe_path(app.path().resource_dir()?);
     // Installed bundles live under a read-only resource directory. Keep the
     // managed-project state in a writable app-data directory instead of
     // letting config.js derive projectsDir from the bundled runtime's current
     // working directory. Preserve an explicit environment override for
     // portable/custom deployments.
-    let app_data = app.path().app_data_dir()?;
+    let app_data = spawn_safe_path(app.path().app_data_dir()?);
     if let Err(error) = fs::create_dir_all(&app_data) {
         eprintln!(
             "harpy could not create app data directory {}: {error}",
@@ -200,7 +219,7 @@ fn start_background_server<R: tauri::Runtime>(app: &AppHandle<R>) -> tauri::Resu
     let log_path = app_data.join("server.log");
     log_line(&log_path, "starting bundled Harpy server");
     let projects_dir = env::var_os("HARPY_PROJECTS")
-        .map(PathBuf::from)
+        .map(|value| spawn_safe_path(PathBuf::from(value)))
         .unwrap_or_else(|| app_data.join("projects"));
     // Resource layout differs slightly between bundler versions when a
     // directory is mapped to a target. Accept both possible nesting levels
@@ -229,7 +248,7 @@ fn start_background_server<R: tauri::Runtime>(app: &AppHandle<R>) -> tauri::Resu
     };
     let bundled_node = bundled_root.join(if cfg!(windows) { "node.exe" } else { "node" });
     let node = env::var_os("HARPY_NODE")
-        .map(PathBuf::from)
+        .map(|value| spawn_safe_path(PathBuf::from(value)))
         .or_else(|| bundled_node.is_file().then_some(bundled_node))
         .unwrap_or_else(|| PathBuf::from("node"));
     log_line(
