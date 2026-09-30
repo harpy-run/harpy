@@ -225,14 +225,6 @@ harpy start --port 3001
 
 For normal installed usage, think in terms of one port: `3001`.
 
-### Upgrading from Pixcode
-
-Harpy is the renamed Pixcode. Existing installs keep their data with a one-time
-manual rename before upgrading: `mv ~/.pixcode ~/.harpy` and rename
-`pixcode-projects/` to `harpy-projects/` (or point `HARPY_PROJECTS` at it).
-`PIXCODE_*` env vars, `px_` API keys, and `pixcode.service` units are no longer
-read — recreate keys and run `harpy daemon install` after upgrading.
-
 ## First Run
 
 1. Open Harpy and set the owner password (≥ 6 characters).
