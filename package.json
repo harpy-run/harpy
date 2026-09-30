@@ -1,7 +1,7 @@
 {
   "name": "@harpy-run/harpy",
-  "version": "2.6.4",
-  "description": "Self-hosted control plane for AI coding agents — web, mobile and desktop",
+  "version": "2.6.5",
+  "description": "Self-hosted control plane for AI coding agents — web and mobile",
   "keywords": [
     "ai",
     "coding-agents",
@@ -18,7 +18,6 @@
     "websocket",
     "workbench",
     "llm",
-    "tauri",
     "preact"
   ],
   "license": "MIT",
@@ -56,14 +55,11 @@
     "start": "node server/cli.js start --port 3001",
     "build": "vite build",
     "prepack": "npm run build",
-    "desktop:prepare": "node scripts/prepare-desktop-resources.mjs",
     "version:sync": "node scripts/sync-version.mjs",
     "check:version": "node scripts/check-version-sync.mjs",
     "version": "node scripts/sync-version.mjs",
     "preview": "vite preview",
-    "lint": "eslint .",
-    "desktop": "npx --yes @tauri-apps/cli@2 tauri dev",
-    "desktop:build": "npx --yes @tauri-apps/cli@2 tauri build"
+    "lint": "eslint ."
   },
   "dependencies": {
     "@homebridge/node-pty-prebuilt-multiarch": "0.14.1",

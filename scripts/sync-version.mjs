@@ -13,8 +13,6 @@ import { fileURLToPath } from 'node:url'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const packagePath = path.join(root, 'package.json')
 const lockPath = path.join(root, 'package-lock.json')
-const tauriPath = path.join(root, 'src-tauri', 'tauri.conf.json')
-const cargoPath = path.join(root, 'src-tauri', 'Cargo.toml')
 const configPath = path.join(root, 'server', 'config.js')
 const updaterPath = path.join(root, 'src', 'lib', 'updater.js')
 
@@ -44,29 +42,6 @@ if (lockJson.packages?.[''] && lockJson.packages[''].version !== version) {
   lockChanged = true
 }
 if (lockChanged) await writeJsonIfChanged(lockPath, lockJson)
-
-const tauriJson = JSON.parse(await readFile(tauriPath, 'utf8'))
-if (tauriJson.version !== version) {
-  tauriJson.version = version
-  await writeJsonIfChanged(tauriPath, tauriJson)
-}
-
-const cargo = await readFile(cargoPath, 'utf8')
-const cargoLines = cargo.split('\n')
-const packageStart = cargoLines.findIndex((line) => line.trim() === '[package]')
-const nextSection = cargoLines.findIndex((line, index) => index > packageStart && /^\s*\[[^\]]+\]/.test(line))
-const packageEnd = nextSection === -1 ? cargoLines.length : nextSection
-if (packageStart === -1) throw new Error('Missing [package] section in ' + cargoPath)
-const packageText = cargoLines.slice(packageStart, packageEnd).join('\n')
-const packageVersion = packageText.match(/^version\s*=\s*"([^"]+)"/m)
-if (!packageVersion) throw new Error('Missing package version in ' + cargoPath)
-if (packageVersion[1] !== version) {
-  const updatedSection = packageText.replace(
-    /^(version\s*=\s*)"[^"]+"/m,
-    '$1"' + version + '"',
-  )
-  await writeFile(cargoPath, cargo.replace(packageText, updatedSection))
-}
 
 const config = await readFile(configPath, 'utf8')
 const configVersion = config.match(/export const VERSION\s*=\s*['"]([^'"]+)['"]/)

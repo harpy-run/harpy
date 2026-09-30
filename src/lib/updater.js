@@ -1,9 +1,10 @@
-// Public release metadata for the desktop and web distributions. The check
-// is deliberately informational: unsigned binaries are never downloaded or
-// executed by the app. Users can review the GitHub release before installing
-// an update, which also keeps the checker safe when a network is intercepted.
+// Public release metadata for the npm-distributed app. The check is
+// deliberately informational: nothing is ever downloaded or executed by the
+// UI — updates are applied by `harpy update`. Users can review the GitHub
+// release before installing, which also keeps the checker safe when a
+// network is intercepted.
 
-export const CURRENT_VERSION = "2.6.4"
+export const CURRENT_VERSION = "2.6.5"
 export const RELEASE_URL = 'https://github.com/harpy-run/harpy/releases/latest'
 const RELEASE_API_URL = 'https://api.github.com/repos/harpy-run/harpy/releases/latest'
 
@@ -30,36 +31,15 @@ export function compareVersions(left, right) {
   return a.prerelease.localeCompare(b.prerelease, undefined, { numeric: true })
 }
 
-function platformAsset(assets = []) {
-  const platform = typeof navigator !== 'undefined'
-    ? (navigator.platform || '') + ' ' + (navigator.userAgent || '')
-    : ''
-  const names = assets
-    .filter((asset) => asset && typeof asset.name === 'string' && typeof asset.browser_download_url === 'string')
-    .map((asset) => ({ name: asset.name, url: asset.browser_download_url }))
-  if (!names.length) return null
-  const preferred = platform.toLowerCase().includes('win')
-    ? names.find((asset) => /\.(msi|exe)$/i.test(asset.name))
-    : platform.toLowerCase().includes('mac') || platform.toLowerCase().includes('darwin')
-      ? names.find((asset) => /\.dmg$/i.test(asset.name))
-      : platform.toLowerCase().includes('linux')
-        ? names.find((asset) => /\.(appimage|deb|rpm)$/i.test(asset.name))
-        : null
-  return preferred || names.find((asset) => /\.(exe|msi|dmg|appimage|deb|rpm)$/i.test(asset.name)) || null
-}
-
 function releaseResult(release) {
   const tag = typeof release?.tag_name === 'string' ? release.tag_name : ''
   const version = tag.replace(/^v/i, '')
   const releaseUrl = typeof release?.html_url === 'string' ? release.html_url : RELEASE_URL
-  const asset = platformAsset(release?.assets)
   return {
     currentVersion: CURRENT_VERSION,
     version,
     updateAvailable: Boolean(version && compareVersions(version, CURRENT_VERSION) > 0),
     releaseUrl,
-    assetUrl: asset?.url || '',
-    assetName: asset?.name || '',
     name: typeof release?.name === 'string' ? release.name : ('Harpy ' + tag),
     notes: typeof release?.body === 'string' ? release.body.trim() : '',
     publishedAt: release?.published_at || ''
@@ -69,7 +49,7 @@ function releaseResult(release) {
 /**
  * Check the public GitHub release feed. This never needs a Harpy account or
  * token and rejects malformed responses so a proxy cannot make the UI offer a
- * bogus installer.
+ * bogus update.
  */
 export async function checkForUpdate({ timeout = 8_000, signal } = {}) {
   const controller = new AbortController()

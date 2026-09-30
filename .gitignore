@@ -11,9 +11,6 @@ coverage/
 .vscode/*
 !.vscode/extensions.json
 .idea/
-src-tauri/target/
-src-tauri/gen/
-.desktop-resources/
 .cache/
 tmp/
 harpy-projects/

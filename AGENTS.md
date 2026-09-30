@@ -3,14 +3,13 @@
 Harpy v2 — a self-hosted AI coding workbench: a Node.js backend (ESM, Node >=22)
 serves a Preact/Vite frontend over HTTP plus one authenticated WebSocket that
 multiplexes `fs`, `git`, `pty`, `agent`, `project`, `auth`, `activity`, `share`
-channels. A Tauri 2
-shell wraps the built frontend for desktop. There is no test runner and no
+channels. There is no test runner and no
 typecheck script — `npm run lint` is the only automated check.
 
 ## Commands
 
-- `npm install` — `node-pty` (backend) and `tauri` (desktop) are native; a C++
-  toolchain / Rust toolchain must be present or installs/builds fail.
+- `npm install` — `node-pty` (backend) is native; a C++
+  toolchain must be present or installs/builds fail.
 - `npm start` (a.k.a. `npm run server`) — backend only, always on the stable
   publication port `3001`. For an isolated port use `node server/cli.js start
   --port N`; host is `0.0.0.0`; serves `dist/` if it exists, otherwise 404s on `/`.
@@ -35,29 +34,12 @@ typecheck script — `npm run lint` is the only automated check.
   the backend at `PORT||HARPY_PORT||3001`, so you must also run `npm start` or API/WS will fail.**
 - `npm run build` — Vite build into `dist/` (what the backend serves in prod).
 - `npm run lint` — ESLint flat config (`eslint.config.js`); run before claiming done.
-- `npm run desktop` / `npm run desktop:build` — Tauri via `npx` (the CLI is
-  intentionally not installed with the normal web/backend dependencies to keep
-  `node_modules` small). `beforeDevCommand` starts Vite, but the Node backend
-  is **not** started for you; run `npm start` separately.
 
-## Desktop shell notes
+## Distribution
 
-- Distribution is npm-only: `release.yml` creates a bare GitHub release (notes +
-  source archive) and publishes `@harpy-run/harpy`. Desktop installers are not
-  published; `npm run desktop:build` still produces a local shell from source.
-- The packaged app spawns a bundled Node server (`resource_dir()/harpy-runtime`,
-  staged by `scripts/prepare-desktop-resources.mjs`). Its stdout/stderr and the
-  shell's own spawn/exit/watchdog events go to `app_data_dir()/server.log` —
-  the "server unavailable" screen tails it via the `harpy_server_log`
-  command, so check there first when the EXE can't reach its backend.
-- **Private Network Access**: WebView2 classifies `tauri.localhost`→`127.0.0.1`
-  as public→private and requires `Access-Control-Allow-Private-Network` on
-  CORS preflights — `setCors` in `server/index.js` answers it. Removing that
-  breaks every packaged desktop fetch (dev is unaffected, `localhost` is
-  already a local address).
-- The bundled server may slide to `port+1..+20` under `HARPY_DESKTOP=1`;
-  `desktopHealth` in `src/lib/api.js` scans 3001–3021 and rejects servers
-  older than `CURRENT_VERSION`.
+npm-only. `release.yml` (tag push `v*` or dispatch) creates a bare GitHub
+release (notes + source archive — no binaries) and publishes
+`@harpy-run/harpy` via the `NPM_TOKEN` repo secret. There is no desktop shell.
 
 Verify order: `npm run lint`. There is no `test` script.
 
@@ -147,7 +129,6 @@ backend first, then `node scripts/smoke.mjs`.
 - `src/` — Preact frontend. Entry `src/main.jsx` → `App.jsx`. State via
   `@preact/signals` (`src/state/`). Styling is **Tailwind v4** through
   `@tailwindcss/vite` (CSS entry `src/styles/tailwind.css`), not a tailwind config.
-- `src-tauri/` — thin Tauri 2 Rust shell (`frontendDist: ../dist`, `devUrl: :5199`).
 - `scripts/` — standalone smoke scripts (no npm wiring).
 - `docs/superpowers/{specs,plans}/` — design docs.
 - `public/` — static assets incl. `sw.js`, registered in prod by `src/main.jsx`.

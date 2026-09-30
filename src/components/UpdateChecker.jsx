@@ -15,9 +15,6 @@ function safeReleaseUrl(value) {
   }
 }
 
-const isTauri = typeof window !== 'undefined'
-  && (location.hostname === 'tauri.localhost' || location.protocol === 'tauri:' || !!window.__TAURI_INTERNALS__)
-
 // Markdown-lite for release notes: headings, bullet lists, bold, code, links.
 // Newlines are preserved so notes never render as one collapsed wall of text.
 function inlineMd(text) {
@@ -77,7 +74,7 @@ export function UpdateChecker({ detailed = false }) {
     } catch (error) {
       setState({ status: 'error', release: null, error: error?.message || 'update check failed' })
     }
-    if (isAdmin.value && !isTauri) {
+    if (isAdmin.value) {
       ws.request('system', 'updateCheck').then((info) => setInstallMode(info.mode || '')).catch(() => {})
     }
   }
@@ -114,7 +111,6 @@ export function UpdateChecker({ detailed = false }) {
   }
 
   const release = state.release
-  const downloadUrl = safeReleaseUrl(release?.assetUrl || release?.releaseUrl)
   const compactVersion = release?.updateAvailable
     ? `v${release.version}`
     : `v${release?.currentVersion || CURRENT_VERSION}`
@@ -125,7 +121,7 @@ export function UpdateChecker({ detailed = false }) {
       : detailed && state.status === 'current'
         ? t('update.current', { version: release?.currentVersion || '' })
         : t('update.check')
-  const canSelfUpdate = !isTauri && isAdmin.value && (installMode === 'npm' || installMode === 'git')
+  const canSelfUpdate = isAdmin.value && (installMode === 'npm' || installMode === 'git')
 
   return <div class={'update-checker ' + (detailed ? 'update-checker-detailed' : 'update-checker-compact')}>
     <button
@@ -150,13 +146,10 @@ export function UpdateChecker({ detailed = false }) {
         <ReleaseNotes notes={release.notes} />
         {updating && <p class="update-progress"><vscode-progress-ring /> {t('update.applying')}</p>}
         <div class="update-actions">
-          {isTauri && <a class="btn-accent update-download" href={downloadUrl} target="_blank" rel="noopener noreferrer">
-            <Download size={14} /> {release.assetName ? t('update.download') : t('update.releaseNotes')}
-          </a>}
           {canSelfUpdate && !updating && <vscode-button onClick={updateNow}>{t('update.updateNow', { mode: installMode })}</vscode-button>}
           <a class="update-release-link" href={safeReleaseUrl(release.releaseUrl)} target="_blank" rel="noopener noreferrer">{t('update.releaseNotes')}</a>
         </div>
-        <small>{isTauri ? t('update.manualInstall') : t('update.serverHint', { mode: installMode || 'npm' })}</small>
+        <small>{t('update.serverHint', { mode: installMode || 'npm' })}</small>
       </section>
     </div>}
   </div>

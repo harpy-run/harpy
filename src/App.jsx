@@ -6,23 +6,6 @@ import { setPrincipal } from './state/app.js'
 import { AuthGate } from './components/AuthGate.jsx'
 import { Shell } from './components/Shell.jsx'
 
-// On desktop the bundled companion writes its own log — tail it so a dead
-// backend stops being a guessing game (antivirus blocks, missing runtimes
-// and port failures all land there).
-function ServerLog() {
-  const [log, setLog] = useState('')
-  useEffect(() => {
-    const invoke = window.__TAURI__?.core?.invoke
-    if (!invoke) return
-    const pull = () => invoke('harpy_server_log').then((text) => setLog(text || '')).catch(() => {})
-    pull()
-    const timer = setInterval(pull, 5000)
-    return () => clearInterval(timer)
-  }, [])
-  if (!log?.trim()) return null
-  return <details class="server-log-box"><summary>{t('app.serverLog')}</summary><pre>{log}</pre></details>
-}
-
 export function App() {
   const [state, setState] = useState({ loading: true, setupRequired: false, authenticated: false })
   const [retryKey, setRetryKey] = useState(0)
@@ -31,8 +14,8 @@ export function App() {
     let cancelled = false
     const wait = (delay) => new Promise((resolve) => setTimeout(resolve, delay))
 
-    // The desktop shell starts the bundled Node process asynchronously. Give
-    // it a brief window to bind its port before treating the backend as down.
+    // The daemon may still be booting (fresh start, update restart). Give it
+    // a brief window to bind its port before treating the backend as down.
     async function healthWithRetry() {
       let lastError
       for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -82,8 +65,8 @@ export function App() {
     return () => window.removeEventListener('harpy:auth-expired', expired)
   }, [])
 
-  // The bundled desktop server may still be booting (or the watchdog may be
-  // respawning it) — keep probing instead of stranding the user on this screen.
+  // The server may still be booting or restarting — keep probing instead of
+  // stranding the user on this screen.
   useEffect(() => {
     if (!state.unavailable) return
     const timer = setInterval(() => {
@@ -94,7 +77,7 @@ export function App() {
   }, [state.unavailable])
 
   if (state.loading) return <div class="loading-screen"><img src="/logo.png" alt="Harpy" /><span>Harpy</span></div>
-  if (state.unavailable) return <div class="loading-screen loading-unavailable"><img src="/logo.png" alt="Harpy" /><span>{t('app.unavailable')}</span><small>{t('app.unavailableHint')}</small><button type="button" class="btn-accent" onClick={() => { setState({ loading: true, setupRequired: false, authenticated: false }); setRetryKey((value) => value + 1) }}>{t('app.retry')}</button><ServerLog /></div>
+  if (state.unavailable) return <div class="loading-screen loading-unavailable"><img src="/logo.png" alt="Harpy" /><span>{t('app.unavailable')}</span><small>{t('app.unavailableHint')}</small><button type="button" class="btn-accent" onClick={() => { setState({ loading: true, setupRequired: false, authenticated: false }); setRetryKey((value) => value + 1) }}>{t('app.retry')}</button></div>
   if (state.authenticated) return <Shell />
   return <AuthGate setupRequired={state.setupRequired} onAuthenticated={() => setState((current) => ({ ...current, authenticated: true }))} />
 }

@@ -31,7 +31,6 @@ import { registerFsListener } from './channels/fs.channel.js'
 
 function allowLocalOrigin(origin) {
   if (!origin) return false
-  if (origin === 'tauri://localhost' || origin === 'http://tauri.localhost' || origin === 'https://tauri.localhost') return true
   return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)
 }
 
@@ -41,13 +40,6 @@ function setCors(req, res) {
   res.setHeader('access-control-allow-origin', origin)
   res.setHeader('access-control-allow-headers', 'authorization, content-type')
   res.setHeader('access-control-allow-methods', 'GET, POST, PUT, DELETE, OPTIONS')
-  // WebView2 cannot resolve the desktop's synthetic `tauri.localhost` origin,
-  // so it classifies fetches to 127.0.0.1 as public→private and requires a
-  // Private Network Access preflight — without this header Chrome blocks the
-  // response and the desktop UI reports the server as unreachable.
-  if (req.headers['access-control-request-private-network'] === 'true') {
-    res.setHeader('access-control-allow-private-network', 'true')
-  }
   res.setHeader('vary', 'Origin')
   return true
 }
@@ -135,12 +127,7 @@ export function startServer(options = {}) {
   const { server } = createHttpServer()
   const port = Number(options.port || config.port)
   const host = options.host || config.host
-  // A desktop install can coexist with an older daemon or another local
-  // service. Keep the normal CLI port stable, but let the bundled companion
-  // move to the next free port instead of exiting before the UI can connect.
-  const allowPortFallback = process.env.HARPY_DESKTOP === '1'
-  const lastPort = Math.min(port + 20, 65535)
-  let activePort = port
+  const activePort = port
   const listen = () => {
     const onListening = () => {
       const displayHost = host === '0.0.0.0' ? 'localhost' : host
@@ -149,14 +136,6 @@ export function startServer(options = {}) {
       shareSupervise({ port: activePort })
     }
     const onError = (error) => {
-      if (allowPortFallback && error?.code === 'EADDRINUSE' && activePort < lastPort) {
-        // Node keeps a listen callback queued when the first bind fails.
-        // Remove it before retrying so a successful fallback emits once.
-        server.removeListener('listening', onListening)
-        activePort += 1
-        listen()
-        return
-      }
       const detail = error?.code === 'EADDRINUSE'
         ? `port ${activePort} is already in use`
         : (error?.message || 'server failed to start')

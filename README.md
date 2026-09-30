@@ -5,13 +5,13 @@
   <p>
     Harpy wraps the coding CLIs you already use — Claude Code, Codex, Gemini CLI,
     Qwen Code, OpenCode, Grok CLI, Devin — in one persistent workspace you can reach
-    from a browser, a phone, or the desktop app.
+    from a browser or a phone.
   </p>
   <p>
     <a href="https://www.npmjs.com/package/@harpy-run/harpy"><img src="https://img.shields.io/npm/v/@harpy-run/harpy?style=for-the-badge&color=10b981" alt="npm version" /></a>
     <a href="https://github.com/harpy-run/harpy/releases/latest"><img src="https://img.shields.io/github/v/release/harpy-run/harpy?style=for-the-badge&color=0ea5e9" alt="latest release" /></a>
     <img src="https://img.shields.io/badge/Node.js-22%2B-3c873a?style=for-the-badge" alt="Node.js 22+" />
-    <img src="https://img.shields.io/badge/Desktop-Windows%20%7C%20macOS%20%7C%20Linux-6366f1?style=for-the-badge" alt="desktop platforms" />
+    <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-6366f1?style=for-the-badge" alt="platforms" />
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue?style=for-the-badge" alt="MIT License" /></a>
     <a href="https://github.com/harpy-run/harpy/discussions"><img src="https://img.shields.io/badge/Discussions-open-9ca3af?style=for-the-badge" alt="Discussions" /></a>
   </p>
@@ -35,7 +35,7 @@
 
 ## What Harpy Does
 
-Harpy is a local web and desktop workbench for AI coding agents. A small Node
+Harpy is a local web workbench for AI coding agents. A small Node
 backend serves the UI over HTTP and multiplexes everything — files, Git,
 terminals, agent sessions — over a single authenticated WebSocket. Run it on
 your laptop or a server, then connect from anywhere.
@@ -194,23 +194,14 @@ npm install -g @harpy-run/harpy
 harpy
 ```
 
-### Desktop shell
-
-Distribution is npm-only — there are no published installers. A Tauri shell
-can still be built locally from source when a desktop window is wanted:
-
-```bash
-npm run desktop:build
-```
-
 ### Background server and autostart
 
 For a server or VDS setup:
 
 The lightweight daemon keeps the HTTP/WebSocket server (and any running CLI
-PTYs) alive after the browser or desktop window is closed. It uses systemd on
-Linux when available, a desktop autostart entry as a fallback, LaunchAgent on
-macOS, and the user Startup folder on Windows. No extra runtime dependency is
+PTYs) alive after the browser window is closed. It uses systemd on Linux when
+available, a desktop autostart entry as a fallback, LaunchAgent on macOS, and
+the user Startup folder on Windows. No extra runtime dependency is
 installed.
 
 ```bash
@@ -265,9 +256,6 @@ Important development notes:
   running separately for API/WebSocket requests.
 - `npm start` runs the backend in the foreground on the stable port `3001`; use
   `harpy daemon install` when it should survive shell/browser closure.
-- `npm run desktop:build` stages the bundled Node runtime and production server
-  dependencies before Tauri creates a local desktop build (installers are no
-  longer published — npm is the only distribution channel).
 - There is no unit test or typecheck script configured today. Use smoke scripts
   (`scripts/smoke.mjs` against a running server), lint, build, and manual
   provider/API checks.
@@ -279,7 +267,6 @@ Important development notes:
 - `server/channels/` - one file per WS channel (`fs`, `git`, `pty`, `agent`,
   `project`, `auth`, `activity`, `share`, `system`).
 - `server/agents/adapters/` - CLI adapters, one per supported coding agent.
-- `src-tauri/` - Tauri 2 desktop shell.
 - `public/` - static assets and the service worker.
 - `docs/` - design docs, translated READMEs, and product screenshots.
 - `scripts/` - standalone smoke/maintenance scripts.

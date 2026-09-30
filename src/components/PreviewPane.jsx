@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { Globe2, Maximize2, RefreshCw, X } from '../lib/icons.jsx'
-import { api, desktopRuntime, resolveApiUrl } from '../lib/api.js'
+import { api, resolveApiUrl } from '../lib/api.js'
 import { t } from '../lib/i18n.js'
 import { TInput } from './Fields.jsx'
 import { workspace } from '../state/app.js'
@@ -16,7 +16,7 @@ const DEVICES = [
 function targetUrl(target) {
   // The dev server lives on the Harpy host; the iframe reaches it through
   // the same hostname the browser used for this UI.
-  const host = desktopRuntime ? '127.0.0.1' : location.hostname
+  const host = location.hostname
   return `http://${host}:${target.port}/`
 }
 
