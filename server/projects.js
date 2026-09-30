@@ -5,7 +5,8 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { config } from './config.js'
 import { httpError } from './util/http.js'
-import { registerWorkspace } from './workspace.js'
+import { registerWorkspace, setUserWorkspaceResolver } from './workspace.js'
+import { accessFor, ownerKey } from './auth.js'
 import { credentialFor, scrubCredentials } from './git-account.js'
 
 let active = null
@@ -37,15 +38,24 @@ function workspaceState() {
       .filter((item) => typeof item?.path === 'string' && item.path.trim())
       .map((item) => ({ path: path.resolve(item.path) }))
     const active = typeof value?.active === 'string' ? value.active : ''
+    // Per-principal selections keep one user's project switch from moving
+    // everyone else's view — the global `active` stays the owner's default.
+    const actives = {}
+    if (value?.actives && typeof value.actives === 'object') {
+      for (const [sub, id] of Object.entries(value.actives)) {
+        if (typeof id === 'string' && id) actives[String(sub)] = id
+      }
+    }
     // A legacy { path } file did not have an active marker. Preserve its
     // external workspace as the startup choice until the user selects a
     // managed project explicitly.
     return {
       active: active || (value?.path ? externalId(value.path) : ''),
-      externals: normalizedExternals
+      externals: normalizedExternals,
+      actives
     }
   } catch {
-    return { active: '', externals: [] }
+    return { active: '', externals: [], actives: {} }
   }
 }
 
@@ -54,9 +64,10 @@ function persistWorkspaceState(state) {
   try {
     fs.mkdirSync(config.dataDir, { recursive: true, mode: 0o700 })
     const externals = [...new Map(state.externals.map((item) => [path.resolve(item.path), { path: path.resolve(item.path) }])).values()]
+    const actives = state.actives && typeof state.actives === 'object' ? state.actives : {}
     const destination = externalWorkspaceFile()
     temporary = destination + '.' + process.pid + '.tmp'
-    fs.writeFileSync(temporary, JSON.stringify({ active: state.active || '', externals }) + '\n', { mode: 0o600 })
+    fs.writeFileSync(temporary, JSON.stringify({ active: state.active || '', externals, actives }) + '\n', { mode: 0o600 })
     fs.renameSync(temporary, destination)
   } catch {
     void 0
@@ -112,6 +123,46 @@ function rememberedExternalWorkspace() {
   }
   return null
 }
+
+// Remember which project each principal selected. Only the owner's pick also
+// moves the process-wide default — a member switching tabs must never move
+// another user's (or an automation's) workspace.
+function rememberSelection(sub, projectId) {
+  const state = workspaceState()
+  state.actives = { ...state.actives, [String(sub || 'owner')]: String(projectId || '') }
+  persistWorkspaceState(state)
+}
+
+function selectionIdFor(sub) {
+  return workspaceState().actives?.[String(sub || 'owner')] || ''
+}
+
+function recordForProjectId(id) {
+  const value = String(id || '')
+  if (!value) return null
+  if (value.startsWith('external:')) {
+    const target = value.slice('external:'.length)
+    try {
+      if (fs.statSync(target).isDirectory()) return { id: value, name: path.basename(target) || target, path: target, external: true }
+    } catch { /* remembered path moved or was deleted */ }
+    return null
+  }
+  if (!/^[\p{L}\p{N}._-]+$/u.test(value)) return null
+  let projectPath
+  try { projectPath = insideRoot(value) } catch { return null }
+  try {
+    if (fs.statSync(projectPath).isDirectory()) return { id: value, name: value, path: projectPath }
+  } catch { /* deleted project */ }
+  return null
+}
+
+function selectionPathFor(sub) {
+  return recordForProjectId(selectionIdFor(sub))?.path || ''
+}
+
+// Requests that carry no explicit workspace resolve to the caller's own
+// selection first — never to whatever project another user last opened.
+setUserWorkspaceResolver((ctx) => selectionPathFor(ownerKey(ctx)))
 
 function root() {
   return path.resolve(config.projectsDir)
@@ -236,22 +287,34 @@ export function initializeWorkspace() {
   return active
 }
 
-export function listProjects() {
+export function listProjects(ctx) {
   const current = active || activeRecord()
+  // The `active` flag marks the caller's own selection, not the process-wide
+  // pick — members who never selected anything see no project pre-activated,
+  // and one user's switch never moves another user's highlight.
+  const effectiveId = ctx
+    ? selectionIdFor(ownerKey(ctx)) || (accessFor(ctx)?.admin ? current?.id : '')
+    : current?.id
   const managed = directoryNames()
     .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
-    .map((name) => projectRecord(name, current?.id === name))
+    .map((name) => projectRecord(name, effectiveId === name))
   const externals = externalRecords()
   if (current?.external && !externals.some((item) => item.id === current.id)) externals.unshift(current)
-  const projects = [...managed, ...externals].map((item) => ({ ...item, active: item.id === current?.id }))
-  if (current) {
-    const activeIndex = projects.findIndex((item) => item.id === current.id)
-    if (activeIndex > 0) projects.unshift(...projects.splice(activeIndex, 1))
-  }
+  const projects = [...managed, ...externals].map((item) => ({ ...item, active: item.id === effectiveId }))
+  const activeIndex = projects.findIndex((item) => item.id === effectiveId)
+  if (activeIndex > 0) projects.unshift(...projects.splice(activeIndex, 1))
   return projects
 }
 
-export function currentProject() {
+export function currentProject(ctx) {
+  if (ctx) {
+    const record = recordForProjectId(selectionIdFor(ownerKey(ctx)))
+    if (record) return { ...record, active: true }
+    // Members without a stored selection get no workspace at all — the
+    // client lands them on their first granted project instead of whatever
+    // the owner last opened.
+    if (!accessFor(ctx)?.admin) return null
+  }
   return active || activeRecord()
 }
 
@@ -265,26 +328,29 @@ export function createProject(name) {
   return projectRecord(projectName, false)
 }
 
-export function selectProject(id) {
+export function selectProject(id, ctx) {
   const requestedId = String(id || '').trim()
+  let record
   if (requestedId.startsWith('external:')) {
-    const record = externalRecords().find((item) => item.id === requestedId)
+    record = recordForProjectId(requestedId)
     if (!record) throw httpError(404, 'workspace not found')
-    config.workspace = record.path
-    registerWorkspace(config.workspace)
-    active = externalRecord(record.path)
-    rememberExternalWorkspace(record.path)
-    return active
+  } else {
+    if (!requestedId || !/^[\p{L}\p{N}._-]+$/u.test(requestedId)) throw httpError(400, 'invalid project')
+    record = recordForProjectId(requestedId)
+    if (!record) throw httpError(404, 'project not found')
   }
-  const projectName = requestedId
-  if (!projectName || !/^[\p{L}\p{N}._-]+$/u.test(projectName)) throw httpError(400, 'invalid project')
-  const projectPath = insideRoot(projectName)
-  if (!fs.existsSync(projectPath) || !fs.lstatSync(projectPath).isDirectory()) throw httpError(404, 'project not found')
-  config.workspace = projectPath
-  registerWorkspace(config.workspace)
-  active = projectRecord(projectName, true)
-  rememberActive(projectName)
-  return active
+  const sub = ctx ? ownerKey(ctx) : 'owner'
+  registerWorkspace(record.path)
+  rememberSelection(sub, record.id)
+  // Only the owner's selection moves the process-wide default and the
+  // remembered startup workspace; everyone else's pick is per-account.
+  if (sub === 'owner') {
+    config.workspace = record.path
+    active = record.external ? externalRecord(record.path) : projectRecord(record.id, true)
+    if (record.external) rememberExternalWorkspace(record.path)
+    else rememberActive(record.id)
+  }
+  return { ...record, active: true }
 }
 
 // Admin-granted workspace roots for per-user allowlists: validate the folder,
@@ -311,7 +377,7 @@ export function grantExternalWorkspace(folderPath) {
   return { id: externalId(resolved), name: path.basename(resolved) || resolved, path: resolved, external: true }
 }
 
-export function openWorkspace(folderPath) {
+export function openWorkspace(folderPath, ctx) {
   const value = String(folderPath || '').trim()
   if (!value) throw httpError(400, 'folder path required')
   const expanded = value === '~' || value.startsWith(`~${path.sep}`) ? path.join(os.homedir(), value.slice(2)) : value
@@ -320,18 +386,31 @@ export function openWorkspace(folderPath) {
   try { stat = fs.statSync(target) } catch { throw httpError(404, 'folder not found') }
   if (!stat.isDirectory()) throw httpError(400, 'path is not a folder')
   const name = managedName(target)
-  if (name) {
+  const record = name
+    ? { id: name, name, path: target }
+    : { id: externalId(target), name: path.basename(target) || target, path: target, external: true }
+  const sub = ctx ? ownerKey(ctx) : 'owner'
+  registerWorkspace(target)
+  if (sub === 'owner') {
     config.workspace = target
-    registerWorkspace(config.workspace)
-    active = projectRecord(name, true)
-    rememberActive(name)
-    return active
+    active = name ? projectRecord(name, true) : externalRecord(target)
+    if (name) rememberActive(name)
+    else rememberExternalWorkspace(target)
+  } else if (record.external) {
+    // A non-owner opening a folder only earns it a picker bookmark — the
+    // shared `active` marker and the global default stay untouched.
+    rememberExternalPath(target)
   }
-  config.workspace = target
-  registerWorkspace(config.workspace)
-  active = externalRecord(target)
-  rememberExternalWorkspace(target)
-  return active
+  rememberSelection(sub, record.id)
+  return { ...record, active: true }
+}
+
+// Bookmark a folder for the picker without switching any workspace pointer.
+function rememberExternalPath(resolved) {
+  const state = workspaceState()
+  if (state.externals.some((item) => path.resolve(item.path) === resolved)) return
+  state.externals = [...state.externals, { path: resolved }]
+  persistWorkspaceState(state)
 }
 
 export function browseDirectories(folderPath) {

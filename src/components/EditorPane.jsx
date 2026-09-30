@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { Bot, ChevronLeft, ChevronRight, FolderOpen, FolderPlus, GitFork, Globe, Plus, Terminal as TerminalIcon, X } from '../lib/icons.jsx'
+import { Blocks, Bot, ChevronLeft, ChevronRight, FolderOpen, FolderPlus, GitFork, Globe, Plus, Terminal as TerminalIcon, X } from '../lib/icons.jsx'
 import { Compartment, EditorState } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
@@ -11,16 +11,18 @@ import { unifiedMergeView } from '@codemirror/merge'
 import { ws } from '../lib/ws.js'
 import { t } from '../lib/i18n.js'
 import { useEscape } from '../lib/useEscape.js'
-import { activeFile, closeFile, isAdmin, openFiles, openPreview, PREVIEW_TAB, theme, workspace } from '../state/app.js'
+import { activeFile, agentRailOpen, closeFile, EXTENSION_TAB_PREFIX, FLEET_TAB, openFleet, isAdmin, openFiles, openPreview, PREVIEW_TAB, setAgentRail, theme, workspace } from '../state/app.js'
 import { PreviewPane } from './PreviewPane.jsx'
+import { ExtensionDetail, extensionLabel } from './ExtensionDetail.jsx'
+import { FleetView } from './FleetView.jsx'
 
 function WelcomeView() {
   function dispatch(name) { window.dispatchEvent(new Event(name)) }
   return <div class="welcome-view">
-    <div class="welcome-hero"><img src="/logo.png" alt="Pixcode" /><div><h1>Pixcode</h1><p>{t('welcome.subtitle')}</p></div></div>
+    <div class="welcome-hero"><img src="/logo.svg" alt="Harpy" /><div><h1>Harpy</h1><p>{t('welcome.subtitle')}</p></div></div>
     <div class="welcome-columns">
-      <section class="welcome-column"><h2>{t('welcome.start')}</h2>{!isAdmin.value && <button type="button" onClick={() => dispatch('pixcode:open-folder')}><FolderOpen size={15} /> {t('project.openExisting')}</button>}<button type="button" onClick={() => dispatch('pixcode:create-file')}><Plus size={15} /> {t('welcome.newFile')}</button>{isAdmin.value && <><button type="button" onClick={() => dispatch('pixcode:open-folder')}><FolderOpen size={15} /> {t('welcome.openFolder')}</button><button type="button" onClick={() => dispatch('pixcode:clone-repo')}><GitFork size={15} /> {t('welcome.cloneRepo')}</button><button type="button" onClick={() => dispatch('pixcode:new-project')}><FolderPlus size={15} /> {t('welcome.newProject')}</button></>}</section>
-      <section class="welcome-column welcome-cards"><h2>{t('welcome.tools')}</h2><button type="button" onClick={() => dispatch('pixcode:open-agent')}><Bot size={15} /><span><strong>{t('welcome.agentTitle')}</strong><small>{t('welcome.agentDescription')}</small></span></button><button type="button" onClick={() => dispatch('pixcode:open-terminal')}><TerminalIcon size={15} /><span><strong>{t('welcome.terminalTitle')}</strong><small>{t('welcome.terminalDescription')}</small></span></button><button type="button" onClick={openPreview}><Globe size={15} /><span><strong>{t('preview.title')}</strong><small>{t('welcome.previewDescription')}</small></span></button></section>
+      <section class="welcome-column"><h2>{t('welcome.start')}</h2>{!isAdmin.value && <button type="button" onClick={() => dispatch('harpy:open-folder')}><FolderOpen size={15} /> {t('project.openExisting')}</button>}<button type="button" onClick={() => dispatch('harpy:create-file')}><Plus size={15} /> {t('welcome.newFile')}</button>{isAdmin.value && <><button type="button" onClick={() => dispatch('harpy:open-folder')}><FolderOpen size={15} /> {t('welcome.openFolder')}</button><button type="button" onClick={() => dispatch('harpy:clone-repo')}><GitFork size={15} /> {t('welcome.cloneRepo')}</button><button type="button" onClick={() => dispatch('harpy:new-project')}><FolderPlus size={15} /> {t('welcome.newProject')}</button></>}</section>
+      <section class="welcome-column welcome-cards"><h2>{t('welcome.tools')}</h2><button type="button" onClick={() => dispatch('harpy:open-agent')}><Bot size={15} /><span><strong>{t('welcome.agentTitle')}</strong><small>{t('welcome.agentDescription')}</small></span></button><button type="button" onClick={() => dispatch('harpy:open-terminal')}><TerminalIcon size={15} /><span><strong>{t('welcome.terminalTitle')}</strong><small>{t('welcome.terminalDescription')}</small></span></button><button type="button" onClick={openFleet}><Blocks size={15} /><span><strong>{t('welcome.fleetTitle')}</strong><small>{t('welcome.fleetDescription')}</small></span></button><button type="button" onClick={openPreview}><Globe size={15} /><span><strong>{t('preview.title')}</strong><small>{t('welcome.previewDescription')}</small></span></button></section>
     </div>
     <p class="welcome-hint">{t('welcome.hint')}</p>
   </div>
@@ -82,7 +84,10 @@ function baseExtensions(onSave, onDirty) {
   ]
 }
 
-function Editor({ path, onDirty }) {
+// `workspacePath` pins the editor to a workspace pane; without it the editor
+// follows the globally selected workspace like the rest of the classic shell.
+export function Editor({ path, onDirty, workspacePath }) {
+  const wsPath = () => (workspacePath ?? workspace.value?.path) || ''
   const host = useRef(null)
   const viewRef = useRef(null)
   const currentRef = useRef('')
@@ -122,13 +127,13 @@ function Editor({ path, onDirty }) {
   async function save() {
     const content = viewRef.current?.state.doc.toString() ?? currentRef.current
     try {
-      const requestWorkspace = workspace.value?.path || ''
+      const requestWorkspace = wsPath()
       await ws.request('fs', 'write', { path, content, workspace: requestWorkspace })
       currentRef.current = content
       diskRef.current = content
       markDirty(false)
       setConflicted(false)
-      window.dispatchEvent(new Event('pixcode:workspace-data-change'))
+      window.dispatchEvent(new Event('harpy:workspace-data-change'))
       setStatus(t('editor.saved'))
       setError('')
       window.setTimeout(() => setStatus(''), 1_500)
@@ -140,7 +145,7 @@ function Editor({ path, onDirty }) {
   useEffect(() => {
     let cancelled = false
     setError('')
-    const requestWorkspace = workspace.value?.path || ''
+    const requestWorkspace = wsPath()
     ws.request('fs', 'read', { path, workspace: requestWorkspace }).then(async ({ content }) => {
       if (cancelled) return
       diskRef.current = content
@@ -167,7 +172,7 @@ function Editor({ path, onDirty }) {
   // chip with an explicit reload instead.
   async function handleExternalChange() {
     try {
-      const { content } = await ws.request('fs', 'read', { path, workspace: workspace.value?.path || '' })
+      const { content } = await ws.request('fs', 'read', { path, workspace: wsPath() })
       const current = viewRef.current?.state.doc.toString() ?? currentRef.current
       diskRef.current = content
       if (content === current) { setConflicted(false); return }
@@ -182,7 +187,7 @@ function Editor({ path, onDirty }) {
   async function reloadFromDisk() {
     setError('')
     try {
-      const { content } = await ws.request('fs', 'read', { path, workspace: workspace.value?.path || '' })
+      const { content } = await ws.request('fs', 'read', { path, workspace: wsPath() })
       diskRef.current = content
       baselineRef.current = content
       setConflicted(false)
@@ -194,7 +199,7 @@ function Editor({ path, onDirty }) {
   }
 
   useEffect(() => ws.on('fs', 'changed', (data) => {
-    if (String(data?.workspace || '') !== (workspace.value?.path || '')) return
+    if (String(data?.workspace || '') !== wsPath()) return
     if (!Array.isArray(data?.files) || !data.files.some((file) => file.path === path)) return
     void handleExternalChange()
   }), [path, showDiff])
@@ -213,11 +218,11 @@ function Editor({ path, onDirty }) {
     try {
       try {
         let baselineOptions = { path }
-        const status = await ws.request('git', 'status', { workspace: workspace.value?.path || '' })
+        const status = await ws.request('git', 'status', { workspace: wsPath() })
         const file = status?.files?.find((entry) => entry.path === path)
         if (file && !file.untracked && file.x !== ' ' && file.y !== ' ') baselineOptions = { path, head: true }
         else if (file && !file.untracked && file.x !== ' ') baselineOptions = { path, staged: true }
-        const result = await ws.request('git', 'baseline', { ...baselineOptions, workspace: workspace.value?.path || '' })
+        const result = await ws.request('git', 'baseline', { ...baselineOptions, workspace: wsPath() })
         baselineRef.current = result?.content ?? ''
       } catch (requestError) {
         // A non-Git workspace still gets a useful local diff against the
@@ -309,6 +314,17 @@ export function EditorPane() {
   }
 
   const previewActive = active === PREVIEW_TAB
+  const extensionId = active.startsWith(EXTENSION_TAB_PREFIX) ? active.slice(EXTENSION_TAB_PREFIX.length) : ''
+  const fleetActive = active === FLEET_TAB
+  // The fleet dashboard needs the whole central area — park the agent rail
+  // while its tab is active and restore it when the user moves on.
+  useEffect(() => {
+    if (!fleetActive) return undefined
+    const wasOpen = agentRailOpen.value
+    if (wasOpen) setAgentRail(false)
+    return () => { if (wasOpen) setAgentRail(true) }
+  }, [fleetActive])
+  const tabLabel = (filePath) => (filePath === PREVIEW_TAB ? t('preview.title') : filePath === FLEET_TAB ? t('fleet.title') : filePath.startsWith(EXTENSION_TAB_PREFIX) ? extensionLabel(filePath.slice(EXTENSION_TAB_PREFIX.length)) : filePath.split('/').at(-1))
   return (
     <>
       <div class="editor-tabs-wrap">
@@ -324,9 +340,9 @@ export function EditorPane() {
               onClick={() => (activeFile.value = filePath)}
               onAuxClick={(event) => { if (event.button === 1) { event.preventDefault(); close(filePath) } }}
               onContextMenu={(event) => { event.preventDefault(); setMenu({ path: filePath, x: Math.min(event.clientX, window.innerWidth - 210), y: Math.min(event.clientY, window.innerHeight - 190) }) }}
-              title={filePath === PREVIEW_TAB ? t('preview.title') : filePath}
+              title={filePath.startsWith('$') ? tabLabel(filePath) : filePath}
             >
-              <span class="editor-tab-name">{filePath === PREVIEW_TAB ? <Globe size={13} /> : (dirtyFiles[filePath] && <span class="dirty-dot" role="img" aria-label="modified">●</span>)}{filePath === PREVIEW_TAB ? t('preview.title') : filePath.split('/').at(-1)}</span>
+              <span class="editor-tab-name">{filePath === PREVIEW_TAB ? <Globe size={13} /> : filePath === FLEET_TAB ? <Bot size={13} /> : filePath.startsWith('$') ? null : (dirtyFiles[filePath] && <span class="dirty-dot" role="img" aria-label="modified">●</span>)}{tabLabel(filePath)}</span>
               <span class="close" role="button" tabIndex={0} title={t('editor.closeTab')} aria-label={t('editor.closeTab')} onClick={(event) => { event.stopPropagation(); close(filePath) }} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); close(filePath) } }}><X size={13} /></span>
             </button>
           ))}
@@ -334,10 +350,11 @@ export function EditorPane() {
         {scrollState.overflow && (
           <button type="button" class="editor-tabs-scroll" disabled={!scrollState.right} onClick={() => scrollTabs(1)} aria-label={t('editor.scrollRight')}><ChevronRight size={14} /></button>
         )}
+        <button type="button" class="editor-preview-btn" onClick={openFleet} title={t('fleet.open')} aria-label={t('fleet.open')}><Bot size={14} /></button>
         <button type="button" class="editor-preview-btn" onClick={openPreview} title={t('preview.open')} aria-label={t('preview.open')}><Globe size={14} /></button>
       </div>
-      <div class="editor-breadcrumb"><span>{previewActive ? t('preview.title') : (active.split('/').slice(0, -1).join(' / ') || t('project.label'))}</span>{!previewActive && <strong>{active.split('/').at(-1)}</strong>}</div>
-      {previewActive ? <PreviewPane /> : <Editor key={workspaceKey + ':' + active} path={active} onDirty={(value) => setDirty(active, value)} />}
+      <div class="editor-breadcrumb"><span>{previewActive ? t('preview.title') : fleetActive ? t('fleet.title') : extensionId ? t('view.extensions') : (active.split('/').slice(0, -1).join(' / ') || t('project.label'))}</span>{!previewActive && <strong>{fleetActive ? t('fleet.subtitle') : extensionId ? extensionLabel(extensionId) : active.split('/').at(-1)}</strong>}</div>
+      {previewActive ? <PreviewPane /> : fleetActive ? <FleetView /> : extensionId ? <ExtensionDetail id={extensionId} /> : <Editor key={workspaceKey + ':' + active} path={active} onDirty={(value) => setDirty(active, value)} />}
       {menu && (
         <>
           <div class="tab-menu-overlay" onClick={() => setMenu(null)} onContextMenu={(event) => { event.preventDefault(); setMenu(null) }} />
@@ -347,7 +364,7 @@ export function EditorPane() {
             <button type="button" role="menuitem" onClick={() => menuAction('right')} disabled={files.indexOf(menu.path) === files.length - 1}>{t('editor.closeToRight')}</button>
             <div class="tab-menu-sep" />
             <button type="button" role="menuitem" onClick={() => menuAction('all')}>{t('editor.closeAll')}</button>
-            {menu.path !== PREVIEW_TAB && <button type="button" role="menuitem" onClick={() => menuAction('copy')}>{t('editor.copyPath')}</button>}
+            {!menu.path.startsWith('$') && <button type="button" role="menuitem" onClick={() => menuAction('copy')}>{t('editor.copyPath')}</button>}
           </div>
         </>
       )}

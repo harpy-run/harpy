@@ -1,27 +1,39 @@
 import { ws } from './ws.js'
-import { workspace } from '../state/app.js'
+import { workspace, leafList, paneAreaVisible } from '../state/app.js'
 
-// One live workspace watch per connection. The subscription dies with the
+// Live workspace watches per connection. The subscription dies with the
 // socket, so it is re-armed on every (re)open and re-pointed whenever the
-// workspace switches. Views only consume `ws.on('fs', 'changed')` events —
-// they never manage the subscription themselves.
-let watched = null
+// workspace or pane layout changes. Views only consume `ws.on('fs',
+// 'changed')` events — they never manage the subscription themselves.
+let watched = new Set()
 
-function currentWorkspace() {
-  return workspace.value?.path || ''
+function desiredPaths() {
+  const paths = new Set()
+  if (workspace.value?.path) paths.add(workspace.value.path)
+  // Split/agent panes pin their own workspaces so a side-by-side project
+  // still receives live fs:changed events without being focused.
+  if (paneAreaVisible.value) {
+    for (const leaf of leafList()) if (leaf.path) paths.add(leaf.path)
+  }
+  return paths
 }
 
 function subscribe(force = false) {
-  const next = currentWorkspace()
-  if (!force && next === watched) return
-  const previous = watched
+  const next = desiredPaths()
+  if (!force && next.size === watched.size && [...next].every((path) => watched.has(path))) return
+  for (const path of watched) {
+    if (!next.has(path)) ws.request('fs', 'unwatch', { workspace: path }).catch(() => {})
+  }
   watched = next
-  if (previous && previous !== next) ws.request('fs', 'unwatch', { workspace: previous }).catch(() => {})
-  ws.request('fs', 'watch', { workspace: next }).catch(() => {})
+  for (const path of watched) ws.request('fs', 'watch', { workspace: path }).catch(() => {})
+}
+
+export function refreshFsWatch() {
+  subscribe()
 }
 
 export function initFsWatch() {
-  window.addEventListener('pixcode:ws-open', () => subscribe(true))
-  window.addEventListener('pixcode:workspace-change', () => subscribe())
+  window.addEventListener('harpy:ws-open', () => subscribe(true))
+  window.addEventListener('harpy:workspace-change', () => subscribe())
   subscribe()
 }

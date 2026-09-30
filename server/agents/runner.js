@@ -12,7 +12,7 @@ import { accessAlive, accessFor, listUsers, ownerKey } from '../auth.js'
 import { projectIdForPath, workspaceCwd, workspaceRoot } from '../workspace.js'
 import { recordActivity } from '../activity.js'
 import { pinFsWatcher, unpinFsWatcher } from '../channels/fs.channel.js'
-import { ensureMemory, MEMORY_PROMPT_HINT, tailFromHistory, writeHandoff } from '../handoffs.js'
+import { ensureMemory, memoryPromptHint, tailFromHistory, writeHandoff } from '../handoffs.js'
 import { runMemoryDigest } from '../memory.js'
 import { notifyWebhook } from '../notify.js'
 
@@ -31,7 +31,10 @@ function announcePresence() { try { presenceNotifier?.() } catch { void 0 } }
 let counter = 0
 const MAX_HISTORY_EVENTS = 2_000
 const MAX_HISTORY_BYTES = 2 * 1024 * 1024
+const WS_HIGH_WATER_BYTES = 2 * 1024 * 1024
+const WS_LOW_WATER_BYTES = 512 * 1024
 const STOPPED_SESSION_TTL = 6 * 60 * 60 * 1_000
+const IDLE_SWEEP_MS = 60_000
 const AUTO_RESTART_MIN_UPTIME_MS = 10_000
 const RESUME_FAST_EXIT_MS = 4_000
 const REGISTRY_FILE = path.join(config.dataDir, 'agent-sessions.json')
@@ -61,6 +64,7 @@ function persistSessions() {
         owner: session.owner,
         index: session.index,
         startedAt: session.startedAt,
+        sleepingAt: session.sleepingAt || 0,
         status: session.state.status
       }))
     }), { mode: 0o600 })
@@ -82,8 +86,128 @@ function dimensions(cols, rows) {
   }
 }
 
+// CLIs spawn helpers that outlive a plain pty kill (devin → `devin acp`,
+// codex → the rust binary + code-mode-host). Those survivors keep holding
+// the session lock files, so the next resume fails with "session_locked".
+// /proc gives the full subtree; the pty child is a session leader, so its
+// group (-pid) covers helpers that re-parented.
+function processTree(rootPid) {
+  const root = Number(rootPid)
+  const tree = new Set([root])
+  const children = new Map()
+  try {
+    for (const name of fs.readdirSync('/proc')) {
+      if (!/^\d+$/.test(name)) continue
+      let stat
+      try { stat = fs.readFileSync(`/proc/${name}/stat`, 'utf8') } catch { continue }
+      const close = stat.lastIndexOf(')')
+      if (close === -1) continue
+      const ppid = Number(stat.slice(close + 2).split(' ')[1])
+      if (!Number.isInteger(ppid) || ppid <= 0) continue
+      const list = children.get(ppid)
+      if (list) list.push(Number(name))
+      else children.set(ppid, [Number(name)])
+    }
+  } catch { return tree }
+  const queue = [root]
+  while (queue.length) {
+    for (const kid of children.get(queue.shift()) || []) {
+      if (!tree.has(kid)) { tree.add(kid); queue.push(kid) }
+    }
+  }
+  return tree
+}
+
+function isProcessAlive(pid) {
+  try { process.kill(pid, 0); return true } catch (error) { return error?.code === 'EPERM' }
+}
+
+// SIGTERM first so a clean exit lets the CLI drop its session lock, then a
+// short grace period before SIGKILL sweeps whatever ignored it.
+function killProcessTree(rootPid, { graceMs = 800 } = {}) {
+  const root = Number(rootPid)
+  if (!Number.isInteger(root) || root <= 0) return
+  const tree = [...processTree(root)]
+  const signal = (pid, sig) => { try { process.kill(pid, sig) } catch { void 0 } }
+  try { process.kill(-root, 'SIGTERM') } catch { void 0 }
+  for (const pid of tree) signal(pid, 'SIGTERM')
+  const sweep = setTimeout(() => {
+    try { process.kill(-root, 'SIGKILL') } catch { void 0 }
+    for (const pid of processTree(root)) signal(pid, 'SIGKILL')
+    for (const pid of tree) signal(pid, 'SIGKILL')
+  }, graceMs)
+  sweep.unref?.()
+}
+
+function terminateSessionProcess(session) {
+  const term = session.term
+  if (!term) return
+  killProcessTree(term.pid)
+  try { term.kill('SIGTERM') } catch { void 0 }
+}
+
+// CLIs report a lock holder in their resume error (devin prints a JSON blob
+// with lockHolderPid). Dig the pid out of the tail of the session's output.
+const LOCK_PID_RE = /lockHolderPid["'\s:=]*(\d{2,10})/i
+function lockHolderFromHistory(session) {
+  for (let i = session.history.length - 1; i >= 0 && i >= session.history.length - 40; i--) {
+    const item = session.history[i]
+    if (item?.type !== 'data') continue
+    const match = LOCK_PID_RE.exec(String(item.data || ''))
+    if (match) return Number(match[1])
+  }
+  return 0
+}
+
+// The holder pid a CLI reports may belong to another harpy session that is
+// legitimately running — never kill those, the user must close that tab.
+function pidOwnedByLiveSession(pid) {
+  for (const other of sessions.values()) {
+    if (!other.term?.pid) continue
+    if (processTree(other.term.pid).has(pid)) return true
+  }
+  return false
+}
+
+function pidMatchesAdapterCli(pid, agent) {
+  try {
+    const cli = getAdapter(agent)?.cli || agent
+    return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes(cli)
+  } catch { return false }
+}
+
+function updateSessionFlowControl(session) {
+  const subscribers = [...session.viewers].filter((subscriber) => subscriber.ws?.readyState === 1)
+  if (!session.term) {
+    clearInterval(session.flowTimer)
+    session.flowTimer = null
+    session.flowPaused = false
+    return
+  }
+  if (!subscribers.length) {
+    if (session.flowPaused) { session.flowPaused = false; session.term?.resume() }
+    clearInterval(session.flowTimer)
+    session.flowTimer = null
+    return
+  }
+  const high = subscribers.some((subscriber) => (subscriber.ws?.bufferedAmount || 0) >= WS_HIGH_WATER_BYTES)
+  const low = subscribers.every((subscriber) => (subscriber.ws?.bufferedAmount || 0) <= WS_LOW_WATER_BYTES)
+  if (high && !session.flowPaused) {
+    session.term.pause()
+    session.flowPaused = true
+    session.flowTimer = setInterval(() => updateSessionFlowControl(session), 100)
+    session.flowTimer.unref?.()
+  } else if (low && session.flowPaused) {
+    session.term.resume()
+    session.flowPaused = false
+    clearInterval(session.flowTimer)
+    session.flowTimer = null
+  }
+}
+
 function emit(session, event) {
   if (session.closed) return
+  if (event.type === 'data') session.lastActivityAt = Date.now()
   const data = { ...event, sessionId: session.sessionId, agent: session.state.agent, workspace: session.workspace, startedAt: session.startedAt, index: session.index, owner: session.owner, seq: ++session.sequence, ts: Date.now() }
   session.history.push(data)
   session.historyBytes += Buffer.byteLength(data.data || '')
@@ -91,17 +215,19 @@ function emit(session, event) {
     const removed = session.history.shift()
     session.historyBytes -= Buffer.byteLength(removed?.data || '')
   }
-  for (const subscriber of session.subscribers) {
+  for (const subscriber of new Set([...session.subscribers, ...session.viewers])) {
     // A revoked account must go quiet even while its socket is still open —
     // drop subscribers whose access died instead of streaming them output.
-    if (!accessAlive(subscriber)) { session.subscribers.delete(subscriber); continue }
-    try { subscriber.emit('agent', 'session', data) } catch { session.subscribers.delete(subscriber) }
+    if (!accessAlive(subscriber)) { session.subscribers.delete(subscriber); session.viewers.delete(subscriber); continue }
+    if (event.type === 'data' && !session.viewers.has(subscriber)) continue
+    try { subscriber.emit('agent', 'session', data) } catch { session.subscribers.delete(subscriber); session.viewers.delete(subscriber) }
   }
+  updateSessionFlowControl(session)
 }
 
 function nextSessionIndex(ctx, agent, currentWorkspace) {
   const active = [...sessions.values()]
-    .filter((item) => item.owner === ownerKey(ctx) && item.workspace === currentWorkspace && item.state.agent === agent && item.state.status === 'running' && !item.closed)
+    .filter((item) => item.owner === ownerKey(ctx) && item.workspace === currentWorkspace && item.state.agent === agent && item.state.status !== 'stopped' && !item.closed)
   // Keep labels stable while any live session remains. Closing #1 while #2
   // is open therefore makes the next session #3; once all live sessions are
   // gone, numbering starts over at #1.
@@ -151,8 +277,9 @@ async function archiveHandoff(session) {
         body: `${files.length} changed file${files.length === 1 ? '' : 's'}${session.ownerName ? ` · ${session.ownerName}` : ''}`,
         workspace: session.workspace
       })
-      // One short headless run on the same CLI turns the handoff snapshot
-      // into durable MEMORY.md entries — gated per-user, never blocking.
+      // One short headless run turns the handoff snapshot into durable
+      // MEMORY.md entries — the session's CLI first, then whatever other
+      // digest-capable CLI answers. Gated per-user, never blocking.
       void runMemoryDigest({
         agent: session.state.agent,
         workspace: session.workspace,
@@ -169,12 +296,49 @@ async function archiveHandoff(session) {
 let sessionEndHook = null
 export function setSessionEndHook(fn) { sessionEndHook = fn }
 
+function markSessionStopped(session) {
+  session.state.status = 'stopped'
+  session.closedAt = Date.now()
+  unpinSessionWorkspace(session)
+  void archiveHandoff(session)
+  try { sessionEndHook?.(session) } catch { void 0 }
+  persistSessions()
+}
+
 function handleExit(session, { exitCode, signal }) {
+  clearInterval(session.flowTimer)
+  session.flowTimer = null
+  session.flowPaused = false
   session.term = null
+  // A suspension kills the PTY but must not run the stopped-session path:
+  // no handoff, no session-end hooks, no reaper — it stays resumable.
+  if (session.state.status === 'sleeping') {
+    persistSessions()
+    announcePresence()
+    return
+  }
   // A resume attempt that dies instantly probably used a flag this CLI does
   // not understand — retry once with plain arguments instead of leaving a
   // dead tab behind.
   const resumeFailed = !session.closed && session.resumedAt && Date.now() - session.resumedAt < RESUME_FAST_EXIT_MS && exitCode !== 0
+  // A resume that fails with the CLI reporting a held session lock means a
+  // stray helper survived the previous kill. Reap it once and retry the
+  // resume so the conversation continues instead of resetting to a fresh
+  // one. A holder that still belongs to a live harpy session is never
+  // killed — the fallback below just spawns a fresh CLI as before.
+  if (resumeFailed && !session.lockKilled) {
+    const holder = lockHolderFromHistory(session)
+    if (holder && !pidOwnedByLiveSession(holder)) {
+      const alive = isProcessAlive(holder)
+      if (!alive || pidMatchesAdapterCli(holder, session.state.agent)) {
+        session.lockKilled = true
+        if (alive) { try { process.kill(holder, 'SIGKILL') } catch { void 0 } }
+        emit(session, { type: 'data', data: `\r\n\x1b[2m[harpy] a leftover ${session.state.agent} process (pid ${holder}) still held this session — killed it, retrying resume\x1b[0m\r\n` })
+        respawnSession(session, { resume: true }).catch(() => markSessionStopped(session))
+        return
+      }
+    }
+  }
   // A long-running process that dies on a non-zero exit was crashed or killed
   // by an error, not deliberately quit. Give it one automatic restart.
   const crashed = !session.closed && !session.autoRestarted && session.state.status === 'running'
@@ -183,14 +347,7 @@ function handleExit(session, { exitCode, signal }) {
   if (resumeFailed || crashed) {
     if (crashed) session.autoRestarted = true
     session.resumedAt = 0
-    respawnSession(session, { resume: false }).catch(() => {
-      session.state.status = 'stopped'
-      session.closedAt = Date.now()
-      unpinSessionWorkspace(session)
-      void archiveHandoff(session)
-      try { sessionEndHook?.(session) } catch { void 0 }
-      persistSessions()
-    })
+    respawnSession(session, { resume: false }).catch(() => markSessionStopped(session))
     return
   }
   // A deliberately closed tab should not be resurrected in connected
@@ -211,14 +368,14 @@ function handleExit(session, { exitCode, signal }) {
   announcePresence()
   setTimeout(() => {
     const current = sessions.get(session.sessionId)
-    if (current && current.state.status !== 'running') {
+    if (current && current.state.status !== 'running' && current.state.status !== 'sleeping') {
       sessions.delete(session.sessionId)
       changedFilesCache.delete(session.sessionId)
     }
   }, STOPPED_SESSION_TTL).unref?.()
 }
 
-async function respawnSession(session, { resume } = {}) {
+async function respawnSession(session, { resume, reason } = {}) {
   let args = null
   if (resume) {
     try { args = session.adapter.buildResumeArgs?.() || null } catch { args = null }
@@ -226,11 +383,13 @@ async function respawnSession(session, { resume } = {}) {
   if (!args) args = session.adapter.buildTerminalArgs({ prompt: '' })
   emit(session, {
     type: 'data',
-    data: `\r\n\x1b[2m[harpy] ${resume ? 'server restarted — resuming this agent session' : 'agent process exited unexpectedly — restarting it'}\x1b[0m\r\n`
+    data: `\r\n\x1b[2m[harpy] ${reason || (resume ? 'server restarted — resuming this agent session' : 'agent process exited unexpectedly — restarting it')}\x1b[0m\r\n`
   })
   await spawnTerm(session, args)
   session.state.status = 'running'
   session.startedAt = Date.now()
+  session.lastActivityAt = Date.now()
+  session.sleepingAt = 0
   pinSessionWorkspace(session)
   if (resume) session.resumedAt = Date.now()
   emit(session, { type: 'status', role: 'system', status: 'started', agent: session.state.agent })
@@ -247,13 +406,13 @@ export async function restoreSessions() {
     // Automation runs are headless one-shots — a daemon restart cannot
     // redeliver their prompt, so respawning them would leave an empty CLI.
     if (record.automation) continue
-    if (record.status !== 'running' || sessions.has(record.sessionId)) continue
+    if (!['running', 'sleeping'].includes(record.status) || sessions.has(record.sessionId)) continue
     const AdapterClass = getAdapter(record.agent)
     if (!AdapterClass) continue
     const session = {
       sessionId: record.sessionId,
       adapter: new AdapterClass(),
-      state: { agent: record.agent, cwd: record.cwd || workspaceCwd(record.workspace, ''), status: 'running' },
+      state: { agent: record.agent, cwd: record.cwd || workspaceCwd(record.workspace, ''), status: record.status === 'sleeping' ? 'sleeping' : 'running' },
       workspace: record.workspace || '',
       history: [],
       historyBytes: 0,
@@ -261,13 +420,21 @@ export async function restoreSessions() {
       owner: normalizeOwner(record.owner),
       subscribers: new Set(),
       term: null,
+      flowPaused: false,
+      flowTimer: null,
+      viewers: new Set(),
       startedAt: record.startedAt || Date.now(),
       index: Number(record.index) || 0,
       size: dimensions(100, 30),
       autoRestarted: false,
-      resumedAt: 0
+      resumedAt: 0,
+      lastActivityAt: record.startedAt || Date.now(),
+      sleepingAt: Number(record.sleepingAt) || 0
     }
     sessions.set(session.sessionId, session)
+    // Sleeping sessions come back as resumable records — no process until a
+    // client presses wake.
+    if (session.state.status === 'sleeping') continue
     try {
       await respawnSession(session, { resume: true })
     } catch {
@@ -279,17 +446,61 @@ export async function restoreSessions() {
   }
 }
 
+// Idle sessions are the ones that come back wedged — the CLI locks itself or
+// its session file goes stale while nobody is looking. Suspending frees the
+// PTY and keeps the session resumable via the adapter's resume mechanism.
+function suspendSession(session) {
+  session.state.status = 'sleeping'
+  session.sleepingAt = Date.now()
+  unpinSessionWorkspace(session)
+  emit(session, { type: 'data', data: '\r\n\x1b[2m[harpy] session suspended after inactivity — press wake to resume where it left off\x1b[0m\r\n' })
+  emit(session, { type: 'status', role: 'system', status: 'sleeping', agent: session.state.agent })
+  terminateSessionProcess(session)
+  recordActivity(session.workspace, 'agent', { action: 'sleep', agent: session.state.agent, index: session.index, user: session.ownerName })
+  persistSessions()
+  announcePresence()
+}
+
+const idleSweep = setInterval(() => {
+  if (!config.agentIdleMs) return
+  const now = Date.now()
+  for (const session of sessions.values()) {
+    if (session.closed || session.automation) continue
+    if (session.state.status !== 'running' || !session.term) continue
+    if (now - (session.lastActivityAt || session.startedAt) < config.agentIdleMs) continue
+    suspendSession(session)
+  }
+// Sweep at most once a minute, but often enough that a short configured
+// timeout is enforced without a long lag (also keeps testing practical).
+}, Math.min(IDLE_SWEEP_MS, Math.max(config.agentIdleMs || IDLE_SWEEP_MS, 1000)))
+idleSweep.unref?.()
+
+// Wake is the inverse of suspend: respawn under the adapter's resume args so
+// the conversation continues. Stopped-but-retained sessions can also be
+// woken; closed ones are gone for good.
+export async function wakeRunner(ctx, sessionId) {
+  const session = getSession(ctx, sessionId, { write: true })
+  if (session.state.status === 'running' && session.term) return sessionInfo(session)
+  session.autoRestarted = false
+  session.lockKilled = false
+  await respawnSession(session, { resume: true, reason: 'resuming suspended session' })
+  return sessionInfo(session)
+}
+
 export async function startRunner(ctx, { agent, prompt = '', cwd, workspace, cols = 100, rows = 30, automation } = {}) {
   const AdapterClass = getAdapter(agent)
   if (!AdapterClass) throw httpError(400, 'unknown agent')
   const sessionId = `s_${++counter}`
   const requestedWorkspace = workspaceRoot(workspace, ctx)
   // Scaffold .harpy/ (MEMORY.md, gitignore, AGENTS.md pointer) before the
-  // spawn so the files exist by the time the agent's first prompt arrives.
-  ensureMemory(requestedWorkspace)
+  // spawn so the files exist by the time the agent's first prompt arrives —
+  // unless the session owner opted out of workspace memory entirely.
+  const sessionOwner = ownerKey(ctx)
+  ensureMemory(requestedWorkspace, sessionOwner)
   // A launch prompt is the only channel guaranteed to reach every CLI —
   // interactive sessions with no prompt get the pointer via AGENTS.md.
-  const initialPrompt = prompt ? `${MEMORY_PROMPT_HINT}\n\n${prompt}` : prompt
+  const memoryContext = memoryPromptHint(requestedWorkspace, sessionOwner)
+  const initialPrompt = [memoryContext, prompt].filter(Boolean).join('\n\n')
   const index = nextSessionIndex(ctx, agent, requestedWorkspace)
   const session = {
     sessionId,
@@ -307,12 +518,17 @@ export async function startRunner(ctx, { agent, prompt = '', cwd, workspace, col
     sequence: 0,
     owner: ownerKey(ctx),
     subscribers: new Set([ctx]),
+    viewers: new Set([ctx]),
     term: null,
+    flowPaused: false,
+    flowTimer: null,
     startedAt: Date.now(),
     index,
     size: dimensions(cols, rows),
     autoRestarted: false,
     resumedAt: 0,
+    lastActivityAt: Date.now(),
+    sleepingAt: 0,
     automation: automation || null,
     ownerName: ctx?.principal?.username || ownerKey(ctx)
   }
@@ -349,7 +565,9 @@ function sessionInfo(session) {
     workspace: session.workspace,
     cwd: session.state.cwd,
     automation: session.automation || null,
-    pid: session.term?.pid || null
+    pid: session.term?.pid || null,
+    sleepingAt: session.sleepingAt || 0,
+    lastActivityAt: session.lastActivityAt || 0
   }
 }
 
@@ -391,8 +609,10 @@ function getSession(ctx, sessionId, { write = false } = {}) {
 
 export function inputRunner(ctx, sessionId, data) {
   const session = getSession(ctx, sessionId, { write: true })
+  if (session.state.status === 'sleeping') throw httpError(409, 'session sleeping — wake it first')
   if (session.state.status !== 'running' || !session.term) throw httpError(404, 'session not running')
   if (data == null) return { ok: true }
+  session.lastActivityAt = Date.now()
   session.term.write(String(data))
   return { ok: true }
 }
@@ -413,17 +633,38 @@ export function resizeRunner(ctx, sessionId, cols, rows) {
 
 export function sendToRunner(ctx, sessionId, text) {
   const session = getSession(ctx, sessionId, { write: true })
+  if (session.state.status === 'sleeping') throw httpError(409, 'session sleeping — wake it first')
   if (session.state.status !== 'running' || !session.term) throw httpError(404, 'session not running')
   if (!String(text || '').trim()) throw httpError(400, 'text required')
+  session.lastActivityAt = Date.now()
   session.term.write(String(text) + '\r')
   return { ok: true }
 }
 
 export function stopRunner(ctx, sessionId) {
   const session = getSession(ctx, sessionId, { write: true })
+  // Stopping a suspended session finalizes it — the PTY is already gone.
+  if (session.state.status === 'sleeping') {
+    session.state.status = 'stopped'
+    session.sleepingAt = 0
+    session.closedAt = Date.now()
+    emit(session, { type: 'done', role: 'system', exitCode: null })
+    persistSessions()
+    announcePresence()
+    // Same retention sweep a PTY exit would run — the record stays readable
+    // for a few hours, then frees its history buffer.
+    setTimeout(() => {
+      const current = sessions.get(session.sessionId)
+      if (current && current.state.status === 'stopped') {
+        sessions.delete(session.sessionId)
+        changedFilesCache.delete(session.sessionId)
+      }
+    }, STOPPED_SESSION_TTL).unref?.()
+    return { ok: true }
+  }
   if (session.state.status === 'running' && session.term) {
     session.state.status = 'stopped'
-    try { session.term.kill() } catch { void 0 }
+    terminateSessionProcess(session)
   }
   announcePresence()
   return { ok: true }
@@ -435,7 +676,7 @@ export function closeRunner(ctx, sessionId) {
   const session = getSession(ctx, sessionId, { write: true })
   session.closed = true
   if (session.state.status === 'running' && session.term) {
-    try { session.term.kill() } catch { void 0 }
+    terminateSessionProcess(session)
     session.state.status = 'stopped'
   }
   sessions.delete(sessionId)
@@ -470,13 +711,19 @@ export function watchRunner(ctx, sessionId) {
     throw httpError(404, 'session not found')
   }
   session.subscribers.add(ctx)
+  session.viewers.add(ctx)
+  updateSessionFlowControl(session)
   const names = usernamesById()
   return { ...sessionInfo(session), owner: session.owner, ownerName: names.get(session.owner) || session.owner }
 }
 
 export function unwatchRunner(ctx, sessionId) {
   const session = sessions.get(sessionId)
-  if (session && session.owner !== ownerKey(ctx)) session.subscribers.delete(ctx)
+  if (session) {
+    session.viewers.delete(ctx)
+    if (session.owner !== ownerKey(ctx)) session.subscribers.delete(ctx)
+    updateSessionFlowControl(session)
+  }
   return { ok: true }
 }
 
@@ -526,19 +773,21 @@ export async function listChangedFiles(ctx, sessionId) {
 export function detachSubscriber(ctx) {
   for (const session of sessions.values()) {
     session.subscribers.delete(ctx)
+    session.viewers.delete(ctx)
+    updateSessionFlowControl(session)
   }
 }
 
 export function listSessions(ctx, requestedWorkspace) {
   const workspace = requestedWorkspace ? workspaceRoot(requestedWorkspace, ctx) : ''
   const own = [...sessions.values()].filter((session) => session.owner === ownerKey(ctx) && (!workspace || session.workspace === workspace))
-  return own.map((session) => {
-    session.subscribers.add(ctx)
-    return sessionInfo(session)
-  })
+  return own.map(sessionInfo)
 }
 
 export function getHistory(ctx, sessionId) {
   const session = getSession(ctx, sessionId)
+  session.viewers.add(ctx)
+  session.subscribers.add(ctx)
+  updateSessionFlowControl(session)
   return session.history
 }

@@ -14,7 +14,7 @@ function ServerLog() {
   useEffect(() => {
     const invoke = window.__TAURI__?.core?.invoke
     if (!invoke) return
-    const pull = () => invoke('pixcode_server_log').then((text) => setLog(text || '')).catch(() => {})
+    const pull = () => invoke('harpy_server_log').then((text) => setLog(text || '')).catch(() => {})
     pull()
     const timer = setInterval(pull, 5000)
     return () => clearInterval(timer)
@@ -78,8 +78,8 @@ export function App() {
   // unrecoverable (token expired, account revoked). Drop back to the gate.
   useEffect(() => {
     const expired = () => setState((current) => ({ ...current, authenticated: false }))
-    window.addEventListener('pixcode:auth-expired', expired)
-    return () => window.removeEventListener('pixcode:auth-expired', expired)
+    window.addEventListener('harpy:auth-expired', expired)
+    return () => window.removeEventListener('harpy:auth-expired', expired)
   }, [])
 
   // The bundled desktop server may still be booting (or the watchdog may be
@@ -93,8 +93,8 @@ export function App() {
     return () => clearInterval(timer)
   }, [state.unavailable])
 
-  if (state.loading) return <div class="loading-screen"><img src="/logo.png" alt="Pixcode" /><span>Pixcode</span></div>
-  if (state.unavailable) return <div class="loading-screen loading-unavailable"><img src="/logo.png" alt="Pixcode" /><span>{t('app.unavailable')}</span><small>{t('app.unavailableHint')}</small><button type="button" class="btn-accent" onClick={() => { setState({ loading: true, setupRequired: false, authenticated: false }); setRetryKey((value) => value + 1) }}>{t('app.retry')}</button><ServerLog /></div>
+  if (state.loading) return <div class="loading-screen"><img src="/logo.png" alt="Harpy" /><span>Harpy</span></div>
+  if (state.unavailable) return <div class="loading-screen loading-unavailable"><img src="/logo.png" alt="Harpy" /><span>{t('app.unavailable')}</span><small>{t('app.unavailableHint')}</small><button type="button" class="btn-accent" onClick={() => { setState({ loading: true, setupRequired: false, authenticated: false }); setRetryKey((value) => value + 1) }}>{t('app.retry')}</button><ServerLog /></div>
   if (state.authenticated) return <Shell />
   return <AuthGate setupRequired={state.setupRequired} onAuthenticated={() => setState((current) => ({ ...current, authenticated: true }))} />
 }

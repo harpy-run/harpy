@@ -1,4 +1,4 @@
-// CDP screenshot driver: open Pixcode, optionally run JS, capture a shot.
+// CDP screenshot driver: open Harpy, optionally run JS, capture a shot.
 // Usage: node scripts/_shot.mjs <out.png> [evalJs] [waitMs] [widthxheight]
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'

@@ -1,11 +1,11 @@
-# Pixcode v2 — Lightweight Self-Hosted Coding Workbench
+# Harpy v2 — Lightweight Self-Hosted Coding Workbench
 
 Date: 2026-08-25
 Status: Approved (user confirmed approach + Tauri 2 + multi-language)
 
 ## Goal
 
-Replace the legacy pixcode codebase (~128K LOC, 524 files, 24+78 deps) with a
+Replace the legacy harpy codebase (~128K LOC, 524 files, 24+78 deps) with a
 minimal, fast, mobile-friendly, self-hosted coding workbench in the spirit of
 VibeVim: one unified core, one protocol, thin adapters.
 
@@ -18,7 +18,7 @@ VibeVim: one unified core, one protocol, thin adapters.
 
 ## Architecture (Approach 1 — Unified Core)
 
-Single npm package (`pixcode`, bin `pixcode`). Node 22+, ESM.
+Single npm package (`harpy`, bin `harpy`). Node 22+, ESM.
 
 ```
 Preact UI (3-pane desktop / bottom-tabs mobile)
@@ -75,8 +75,8 @@ bar; all UI strings go through `t()`.
 
 ## Auth
 
-First run: setup password → scrypt hash stored with salt in `~/.pixcode/auth.json`.
-Login issues HS256 JWT (24h). API keys (`px_…`) stored alongside, accepted as
+First run: setup password → scrypt hash stored with salt in `~/.harpy/auth.json`.
+Login issues HS256 JWT (24h). API keys (`hp_…`) stored alongside, accepted as
 `X-API-Key` or `Authorization: Bearer`. All `/api/*` and WS require auth except
 setup/login/health.
 
@@ -94,7 +94,7 @@ reuse it. Dev mode points at Vite URL; production serves `dist/`.
 
 ## Distribution
 
-`npm i -g pixcode && pixcode start [--port]`. CLI: `start | status | version`.
+`npm i -g harpy && harpy start [--port]`. CLI: `start | status | version`.
 Conventional Commits; release-it comes back after the skeleton stabilizes.
 
 ## Error handling

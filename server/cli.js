@@ -4,10 +4,11 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { ask, box, c, choose, closePrompts, confirm, isInteractive } from './cli-ui.js'
 import { cliConfigExists, readCliConfig, resolvePort, validPort, writeCliConfig } from './cli-config.js'
+import { cliLang, envLang, LOCALES, noWords, translator, yesWords, ynHint } from './cli-i18n.js'
 
 function usage() {
-  console.log(`pixcode
-Usage: pixcode <command>
+  console.log(`harpy
+Usage: harpy <command>
 
 Commands:
   (none)                                Interactive dashboard
@@ -82,12 +83,12 @@ function printDaemonResult(result, json = false) {
 }
 
 // What is living on this port right now? Friendly wording for the three
-// possible answers: our daemon, a pixcode we do not manage, a foreign app.
+// possible answers: our daemon, a harpy we do not manage, a foreign app.
 async function describePort(port) {
   const { healthProbe } = await import('./daemon.js')
   const probe = await healthProbe(port)
   if (!probe.occupied) return { kind: 'free', probe }
-  if (probe.pixcode) return { kind: 'pixcode', probe }
+  if (probe.harpy) return { kind: 'harpy', probe }
   return { kind: 'foreign', probe }
 }
 
@@ -100,7 +101,36 @@ function openBrowser(url) {
 // --- interactive home -----------------------------------------------------
 
 async function home() {
-  const { daemonStatus, stopDaemon, startDaemon, readDaemonLog } = await import('./daemon.js')
+  const { daemonStatus, stopDaemon, startDaemon, readDaemonLog, installAutostart, removeAutostart } = await import('./daemon.js')
+
+  // First run: the wizard owns the screen — the language question comes
+  // first and every following prompt renders in the picked language. It ends
+  // by applying autostart + the background-daemon choice and printing the URL.
+  if (isInteractive()) {
+    if (!cliConfigExists()) {
+      const merged = await firstRunWizard({})
+      if (merged._wizard) {
+        const t0 = translator(merged._lang)
+        const cfg = readCliConfig()
+        if (merged._autostart) installAutostart({ port: merged.port, workspace: cfg.workspace, mode: 'auto' })
+        else removeAutostart()
+        if (merged._background !== false) {
+          console.log(`  ${c.dim(t0('startBg'))}`)
+          const started = await startDaemon({ port: merged.port, workspace: cfg.workspace })
+          console.log(`  ${started.listening ? c.ok('✓') : c.warn('!')} ${started.message}`)
+          if (started.listening) console.log(`\n  ${c.cyan(`→ http://localhost:${merged.port}`)} ${c.dim(t0('linkNote'))}\n`)
+        } else {
+          console.log(`  ${c.dim(t0('startLater'))}\n`)
+        }
+      }
+    } else if (!readCliConfig().lang) {
+      // Existing installs from before the language pick — ask it once, alone.
+      const lang = await askLanguage()
+      if (lang) writeCliConfig({ lang })
+    }
+  }
+
+  const t = translator(cliLang())
   const settings = readCliConfig()
   const port = resolvePort()
   const status = await daemonStatus({ port })
@@ -110,39 +140,40 @@ async function home() {
     return
   }
 
+  const label = (s) => s.padEnd(13)
   const rows = [
-    `status     ${status.running ? c.ok('● running') : c.dim('○ stopped')}${status.pid ? c.dim(` · pid ${status.pid}`) : ''}`,
-    `port       ${status.port}`,
-    `autostart  ${status.service.enabled ? c.ok(`enabled (${status.service.mode})`) : c.dim('disabled')}`
+    `${label(t('rowStatus'))}${status.running ? c.ok(`● ${t('stRunning')}`) : c.dim(`○ ${t('stStopped')}`)}${status.pid ? c.dim(` · pid ${status.pid}`) : ''}`,
+    `${label(t('rowPort'))}${status.port}`,
+    `${label(t('rowAutostart'))}${status.service.enabled ? c.ok(`${t('stEnabled')} (${status.service.mode})`) : c.dim(t('stDisabled'))}`
   ]
   if (status.listening) {
-    rows.push(`local      ${c.cyan(`http://localhost:${status.port}`)}`)
-    for (const ip of lanIps()) rows.push(`lan        ${c.cyan(`http://${ip}:${status.port}`)}`)
+    rows.push(`${label(t('rowLocal'))}${c.cyan(`http://localhost:${status.port}`)}`)
+    for (const ip of lanIps()) rows.push(`${label(t('rowLan'))}${c.cyan(`http://${ip}:${status.port}`)}`)
   }
   const { shareStatus } = await import('./share.js')
   const share = shareStatus()
-  if (share.url) rows.push(`public     ${c.cyan(share.url)} ${c.dim(`(${share.provider})`)}`)
-  else if (share.enabled) rows.push(`public     ${c.warn(`${share.provider} enabled but not running`)}`)
-  if (!status.listening && status.running) rows.push(c.warn('daemon alive but not listening yet — check `pixcode daemon logs`'))
-  box(`pixcode ${c.accent('v' + status.version)}`, rows)
+  if (share.url) rows.push(`${label(t('rowPublic'))}${c.cyan(share.url)} ${c.dim(`(${share.provider})`)}`)
+  else if (share.enabled) rows.push(`${label(t('rowPublic'))}${c.warn(t('shareNotRunning', { provider: share.provider }))}`)
+  if (!status.listening && status.running) rows.push(c.warn(t('warnNotListening')))
+  box(`harpy ${c.accent('v' + status.version)}`, rows)
   console.log('')
 
   for (;;) {
-    const action = await choose('what next?', [
-      { value: 'start', label: status.running ? 'Restart daemon' : 'Start daemon' },
-      { value: 'install', label: 'Install autostart', hint: status.service.enabled ? 'already enabled' : 'survives reboot' },
-      { value: 'open', label: 'Open in browser', hint: status.listening ? `localhost:${status.port}` : 'server is down' },
-      { value: 'share', label: 'Public link', hint: share.url || 'expose on a public https URL' },
-      { value: 'settings', label: 'Settings', hint: `${settings.port}${settings.workspace ? ` · ${settings.workspace}` : ''}` },
-      { value: 'update', label: 'Check for updates' },
-      { value: 'logs', label: 'View logs', hint: 'last 20 lines' },
-      { value: 'stop', label: 'Stop daemon' }
+    const action = await choose(t('menuNext'), [
+      { value: 'start', label: status.running ? t('mRestart') : t('mStart') },
+      { value: 'install', label: t('mAutostart'), hint: status.service.enabled ? t('hAutoOn') : t('hAutoOff') },
+      { value: 'open', label: t('mOpen'), hint: status.listening ? `localhost:${status.port}` : t('hOpenDown') },
+      { value: 'share', label: t('mShare'), hint: share.url || t('hShareOff') },
+      { value: 'settings', label: t('mSettings'), hint: `${settings.port}${settings.workspace ? ` · ${settings.workspace}` : ''}` },
+      { value: 'update', label: t('mUpdate') },
+      { value: 'logs', label: t('mLogs'), hint: t('hLogs') },
+      { value: 'stop', label: t('mStop') }
     ], { defaultValue: 'open' })
 
     if (action === null || action === 'back') break
     if (action === 'open') {
       if (status.listening) openBrowser(`http://localhost:${status.port}`)
-      else console.log(`  ${c.warn('server is not listening — start it first')}`)
+      else console.log(`  ${c.warn(t('msgNoListen'))}`)
     } else if (action === 'start') {
       if (status.running) await stopDaemon()
       const result = await startDaemon({ port: settings.port, workspace: settings.workspace })
@@ -150,7 +181,7 @@ async function home() {
       Object.assign(status, result)
     } else if (action === 'stop') {
       await stopDaemon()
-      console.log(`  ${c.ok('✓')} daemon stopped`)
+      console.log(`  ${c.ok('✓')} ${t('msgStopped')}`)
       break
     } else if (action === 'install') {
       await installFlow({})
@@ -164,7 +195,7 @@ async function home() {
       await updateFlow({})
     } else if (action === 'logs') {
       const output = readDaemonLog().trim().split('\n').slice(-20).join('\n')
-      console.log(output ? `\n${c.dim(output)}\n` : `  ${c.dim('log is empty')}`)
+      console.log(output ? `\n${c.dim(output)}\n` : `  ${c.dim(t('logEmpty'))}`)
     }
   }
   closePrompts()
@@ -172,9 +203,9 @@ async function home() {
 
 // --- share / public link ---------------------------------------------------
 
-// `pixcode share` — interactive menu when TTY, plain status otherwise.
-// `pixcode share status` · `pixcode share enable <provider> key=value …` ·
-// `pixcode share disable`.
+// `harpy share` — interactive menu when TTY, plain status otherwise.
+// `harpy share status` · `harpy share enable <provider> key=value …` ·
+// `harpy share disable`.
 async function shareCommand(args) {
   const { shareStatus, shareEnable, shareDisable, shareProviders } = await import('./share.js')
   const sub = args[0]
@@ -196,7 +227,7 @@ async function shareCommand(args) {
       const m = a.match(/^--?([\w-]+)=(.*)$/)
       if (m) opts[m[1]] = m[2]
     }
-    if (!provider) { console.error('usage: pixcode share enable <provider> [key=value …]'); process.exitCode = 1; return }
+    if (!provider) { console.error('usage: harpy share enable <provider> [key=value …]'); process.exitCode = 1; return }
     try {
       const st = await shareEnable(provider, opts)
       console.log(`  ${c.ok('✓')} ${st.url}`)
@@ -208,47 +239,49 @@ async function shareCommand(args) {
   }
 
   // interactive menu
+  const t = translator(cliLang())
+  const label = (s) => s.padEnd(10)
   const providers = shareProviders()
   for (;;) {
     const st = shareStatus()
-    box('public link', [
-      `status    ${st.running ? c.ok('● live') : c.dim('○ off')}`,
-      `provider  ${st.provider || '—'}`,
-      `url       ${st.url ? c.cyan(st.url) : '—'}`
+    box(t('shareTitle'), [
+      `${label(t('rowStatus'))}${st.running ? c.ok(`● ${t('stLive')}`) : c.dim(`○ ${t('stOff')}`)}`,
+      `${label(t('rowProvider'))}${st.provider || '—'}`,
+      `${label(t('rowUrl'))}${st.url ? c.cyan(st.url) : '—'}`
     ])
-    const action = await choose('share', [
-      { value: 'enable', label: st.running ? 'Change provider' : 'Enable public link' },
-      { value: 'open', label: 'Open public URL', hint: st.url || 'not live' },
-      { value: 'disable', label: 'Disable', hint: st.running ? '' : 'not enabled' },
-      { value: 'pubkey', label: 'Show share ssh pubkey', hint: 'authorize it on your sish relay' }
+    const action = await choose(t('shareTitle'), [
+      { value: 'enable', label: st.running ? t('mShareChange') : t('mShareEnable') },
+      { value: 'open', label: t('mShareOpen'), hint: st.url || t('hNotLive') },
+      { value: 'disable', label: t('mShareDisable'), hint: st.running ? '' : t('hNotEnabled') },
+      { value: 'pubkey', label: t('mSharePubkey'), hint: t('hPubkey') }
     ])
     if (action === null || action === 'back') break
     if (action === 'disable') {
       shareDisable()
-      console.log(`  ${c.ok('✓')} disabled`)
+      console.log(`  ${c.ok('✓')} ${t('msgDisabled')}`)
     } else if (action === 'open') {
       if (st.url) openBrowser(st.url)
-      else console.log(`  ${c.warn('no public URL — enable a provider first')}`)
+      else console.log(`  ${c.warn(t('shareNoUrl'))}`)
     } else if (action === 'pubkey') {
-      console.log(st.pubkey ? `\n  ${c.cyan(st.pubkey)}\n` : `  ${c.dim('no key yet — generated when a provider needs it')}`)
+      console.log(st.pubkey ? `\n  ${c.cyan(st.pubkey)}\n` : `  ${c.dim(t('shareNoKey'))}`)
     } else if (action === 'enable') {
-      const pick = await choose('provider', providers.map((p) => ({
+      const pick = await choose(t('shareProviderQ'), providers.map((p) => ({
         value: p.id,
         label: p.label,
-        hint: p.fixed ? 'stable URL' : 'random URL each start'
+        hint: p.fixed ? t('hShareFixed') : t('hShareRandom')
       })))
       if (!pick || pick === 'back') continue
       const def = providers.find((p) => p.id === pick)
       const opts = {}
       for (const field of def.fields) {
-        const v = await ask(`${field.label}${field.required ? '' : ' (optional)'}`, field.default || '')
+        const v = await ask(`${field.label}${field.required ? '' : ` ${t('shareOptional')}`}`, field.default || '')
         if (v) opts[field.key] = v
       }
       try {
         const enabled = await shareEnable(pick, opts)
         console.log(`  ${c.ok('✓')} ${c.cyan(enabled.url)}`)
       } catch (e) {
-        console.log(`  ${c.err('share failed:')} ${e.message}`)
+        console.log(`  ${c.err(t('shareFailed'))} ${e.message}`)
       }
     }
   }
@@ -256,49 +289,78 @@ async function shareCommand(args) {
 
 // --- first-run wizard ------------------------------------------------------
 
-// Runs once before `daemon install` when the operator has not chosen a port
-// yet. Skipped entirely for --json, flags, or non-TTY callers.
-async function firstRunWizard(options) {
+// The language question — always first, asked in a language-neutral picker
+// (native names + English hint). Returns the locale id or null on quit.
+async function askLanguage() {
+  const pick = await choose('choose your language', LOCALES.map((l) => ({
+    value: l.id,
+    label: l.name,
+    hint: l.english || undefined
+  })), { defaultValue: envLang() || 'en' })
+  return pick && pick !== 'back' ? pick : null
+}
+
+// yes/no plumbing for the picked language — native words on top of y/yes.
+function ynOpts(lang) {
+  return { yes: yesWords(lang), no: noWords(lang), hint: ynHint(lang) }
+}
+
+// Runs once on the very first interactive launch (no cli.json). Skipped
+// entirely for --json, flags, or non-TTY callers. `askBackground` is false on
+// `daemon install` — there the background choice is the command itself.
+async function firstRunWizard(options, { askBackground = true } = {}) {
   if (!isInteractive() || options.json || options.port || cliConfigExists()) return options
   const settings = readCliConfig()
-  console.log(`\n  ${c.bold('pixcode setup')} ${c.dim('— first run, two questions')}\n`)
+
+  const lang = await askLanguage()
+  if (!lang) return options // quit at the picker — nothing written, ask next time
+  const t = translator(lang)
+  console.log(`\n  ${c.bold('harpy setup')} ${c.dim(t('setupSubtitle'))}\n`)
+
+  const background = askBackground
+    ? await confirm(t('bgQ'), true, { note: t('bgNote'), ...ynOpts(lang) })
+    : true
+  const autostart = await confirm(t('autoQ'), settings.autostart !== false, { note: t('autoNote'), ...ynOpts(lang) })
 
   let port = settings.port
   for (;;) {
-    const answer = await ask('port', String(port))
+    const answer = await ask(t('portQ'), String(port))
     const candidate = validPort(answer)
-    if (!candidate) { console.log(`  ${c.err('not a valid port')}`); continue }
+    if (!candidate) { console.log(`  ${c.err(t('portBad'))}`); continue }
     const holder = await describePort(candidate)
     if (holder.kind === 'free') { port = candidate; break }
-    if (holder.kind === 'pixcode') {
-      console.log(`  ${c.ok('✓')} pixcode is already serving on :${candidate} (v${holder.probe.version || '?'}) — reusing it`)
+    if (holder.kind === 'harpy') {
+      console.log(`  ${c.ok('✓')} ${t('portHarpy', { port: candidate, version: holder.probe.version || '?' })}`)
       port = candidate
       break
     }
-    console.log(`  ${c.warn(`:${candidate} is used by another app — pick a different port`)}`)
+    console.log(`  ${c.warn(t('portForeign', { port: candidate }))}`)
     port = candidate + 1
   }
 
-  const autostart = await confirm('start pixcode automatically at login?', settings.autostart)
-  const next = writeCliConfig({ port, autostart })
-  console.log(`  ${c.dim(`saved → ${next ? 'cli.json' : ''}`)}\n`)
-  return { ...options, port, _wizard: true, _autostart: autostart }
+  writeCliConfig({ lang, background, autostart, port })
+  console.log(`  ${c.dim(t('saved'))}\n`)
+  return { ...options, port, _wizard: true, _lang: lang, _autostart: autostart, _background: background }
 }
 
 async function installFlow(options) {
   const { installAutostart, removeAutostart, startDaemon } = await import('./daemon.js')
   const settings = readCliConfig()
+  const t = translator(cliLang())
   const port = resolvePort(options.port)
   const wantAutostart = options._autostart ?? settings.autostart
   const service = wantAutostart
     ? installAutostart({ port, workspace: options.workspace ?? settings.workspace, mode: options.mode || 'auto' })
     : removeAutostart()
   const started = await startDaemon({ port, workspace: options.workspace ?? settings.workspace })
-  const result = { ...started, service, message: wantAutostart ? 'autostart enabled and daemon started' : 'daemon started (autostart off)' }
+  const message = options.json
+    ? (wantAutostart ? 'autostart enabled and daemon started' : 'daemon started (autostart off)')
+    : t(wantAutostart ? 'instOn' : 'instOff')
+  const result = { ...started, service, message }
   if (options.json) printDaemonResult(result, true)
   else {
     printDaemonResult(result)
-    if (started.listening) console.log(`\n  ${c.cyan(`→ http://localhost:${port}`)}`)
+    if (started.listening) console.log(`\n  ${c.cyan(`→ http://localhost:${port}`)} ${c.dim(t('linkNote'))}`)
   }
   return result
 }
@@ -309,6 +371,7 @@ async function settingsFlow() {
   const { daemonStatus, installAutostart, removeAutostart, stopDaemon, startDaemon } = await import('./daemon.js')
 
   const apply = async (label) => {
+    const t = translator(cliLang())
     const settings = readCliConfig()
     const status = await daemonStatus({ port: settings.port })
     if (settings.autostart) installAutostart({ port: settings.port, workspace: settings.workspace })
@@ -316,7 +379,7 @@ async function settingsFlow() {
     if (status.running) {
       await stopDaemon()
       await startDaemon({ port: settings.port, workspace: settings.workspace })
-      console.log(`  ${c.ok('✓')} ${label} — daemon restarted on :${settings.port}`)
+      console.log(`  ${c.ok('✓')} ${t('daemonRestarted', { label, port: settings.port })}`)
     } else {
       console.log(`  ${c.ok('✓')} ${label}`)
     }
@@ -327,57 +390,66 @@ async function settingsFlow() {
     return
   }
 
+  const label = (s) => s.padEnd(13)
   for (;;) {
+    const t = translator(cliLang())
     const settings = readCliConfig()
     const status = await daemonStatus({ port: settings.port })
-    box('settings', [
-      `port       ${settings.port}${status.listening ? c.dim(' · listening') : ''}`,
-      `workspace  ${settings.workspace || c.dim('(managed projects)')}`,
-      `autostart  ${settings.autostart ? 'on' : 'off'}${status.service.enabled ? c.dim(` · ${status.service.mode}`) : ''}`,
-      `webhook    ${settings.webhook || c.dim('(none)')}`
+    box(t('setTitle'), [
+      `${label(t('rowPort'))}${settings.port}${status.listening ? c.dim(` · ${t('stListening')}`) : ''}`,
+      `${label(t('rowWorkspace'))}${settings.workspace || c.dim(t('setManaged'))}`,
+      `${label(t('rowAutostart'))}${settings.autostart ? t('stEnabled') : t('stDisabled')}${status.service.enabled ? c.dim(` · ${status.service.mode}`) : ''}`,
+      `${label(t('rowWebhook'))}${settings.webhook || c.dim(t('setNone'))}`
     ])
     console.log('')
-    const pick = await choose('change what?', [
-      { value: 'port', label: 'Port' },
-      { value: 'workspace', label: 'Pinned workspace' },
-      { value: 'autostart', label: `Autostart ${settings.autostart ? 'off' : 'on'}` },
-      { value: 'webhook', label: 'Notify webhook' },
-      { value: 'back', label: 'Back' }
+    const pick = await choose(t('setPick'), [
+      { value: 'port', label: t('setPort') },
+      { value: 'workspace', label: t('setPinned') },
+      { value: 'autostart', label: settings.autostart ? t('setAutoOff') : t('setAutoOn') },
+      { value: 'webhook', label: t('setWh') },
+      { value: 'lang', label: t('setLang') },
+      { value: 'back', label: t('setBack') }
     ], { defaultValue: 'back' })
     if (pick === null || pick === 'back') break
 
+    if (pick === 'lang') {
+      const lang = await askLanguage()
+      if (lang) writeCliConfig({ lang })
+      continue
+    }
+
     if (pick === 'webhook') {
-      const value = await ask('webhook URL (empty = off)', settings.webhook || '')
-      if (value && !/^https?:\/\//.test(value)) { console.log(`  ${c.err('must be an http(s) URL')}`); continue }
+      const value = await ask(t('whAsk'), settings.webhook || '')
+      if (value && !/^https?:\/\//.test(value)) { console.log(`  ${c.err(t('whBad'))}`); continue }
       writeCliConfig({ webhook: value || null })
       // The running server re-reads cli.json on every send — no restart needed.
-      console.log(`  ${c.ok('✓')} webhook ${value ? '→ ' + value : 'off'}`)
+      console.log(`  ${c.ok('✓')} ${value ? t('whEnabled', { url: value }) : t('whDisabled')}`)
       continue
     }
 
     if (pick === 'autostart') {
       writeCliConfig({ autostart: !settings.autostart })
-      await apply(`autostart ${settings.autostart ? 'off' : 'on'}`)
+      await apply(settings.autostart ? t('autoOff') : t('autoOn'))
       continue
     }
     if (pick === 'workspace') {
-      const value = await ask('absolute path (empty = managed projects)', settings.workspace || '')
+      const value = await ask(t('wsAsk'), settings.workspace || '')
       writeCliConfig({ workspace: value || null })
-      await apply('workspace updated')
+      await apply(t('wsSaved'))
       continue
     }
     if (pick === 'port') {
-      const answer = await ask('new port', String(settings.port))
+      const answer = await ask(t('portAskNew'), String(settings.port))
       const candidate = validPort(answer)
-      if (!candidate) { console.log(`  ${c.err('not a valid port')}`); continue }
+      if (!candidate) { console.log(`  ${c.err(t('portBad'))}`); continue }
       const holder = await describePort(candidate)
-      if (holder.kind === 'foreign') { console.log(`  ${c.err(`:${candidate} is used by another app`)}`); continue }
-      if (holder.kind === 'pixcode' && candidate !== settings.port) {
-        console.log(`  ${c.warn(`:${candidate} already runs a pixcode — point the daemon there? no, pick a free port`)}`)
+      if (holder.kind === 'foreign') { console.log(`  ${c.err(t('portForeignShort', { port: candidate }))}`); continue }
+      if (holder.kind === 'harpy' && candidate !== settings.port) {
+        console.log(`  ${c.warn(t('portHarpyShort', { port: candidate }))}`)
         continue
       }
       writeCliConfig({ port: candidate })
-      await apply(`port → ${candidate}`)
+      await apply(t('portTo', { port: candidate }))
     }
   }
 }
@@ -400,10 +472,15 @@ async function settingsCommand(args) {
       writeCliConfig({ webhook: value || null })
       console.log('saved — the running daemon picks this up on the next send')
       return
+    } else if (key === 'lang' || key === 'language') {
+      if (value && !LOCALES.some((l) => l.id === value)) {
+        throw new Error(`settings set lang <${LOCALES.map((l) => l.id).join('|')}>`)
+      }
+      writeCliConfig({ lang: value || null })
     } else {
-      throw new Error('known keys: port, workspace, autostart, webhook')
+      throw new Error('known keys: port, workspace, autostart, webhook, lang')
     }
-    console.log('saved. Restart the daemon to apply: pixcode daemon restart')
+    console.log('saved. Restart the daemon to apply: harpy daemon restart')
     return
   }
   await settingsFlow()
@@ -413,28 +490,30 @@ async function settingsCommand(args) {
 
 async function updateFlow(options) {
   const { checkForUpdate, applyUpdate, installMode, RELEASE_PAGE } = await import('./update.js')
+  const t = translator(cliLang())
+  const label = (s) => s.padEnd(10)
   const info = await checkForUpdate()
   box('update', [
-    `current    ${info.current}`,
-    `npm        ${info.npm || c.dim('unreachable')}`,
-    `github     ${info.github ? 'v' + info.github : c.dim('unreachable')}`,
-    `channel    ${installMode()}`
+    `${label(t('updCurrent'))}${info.current}`,
+    `${label(t('updNpm'))}${info.npm || c.dim(t('updUnreachable'))}`,
+    `${label(t('updGithub'))}${info.github ? 'v' + info.github : c.dim(t('updUnreachable'))}`,
+    `${label(t('updChannel'))}${installMode()}`
   ])
   console.log('')
   if (!info.updateAvailable) {
-    console.log(`  ${c.ok('✓')} already on the latest release`)
+    console.log(`  ${c.ok('✓')} ${t('updFresh')}`)
     return
   }
-  console.log(`  ${c.accent('→')} ${c.bold('v' + info.latest)} available`)
+  console.log(`  ${c.accent('→')} ${c.bold(t('updAvail', { latest: info.latest }))}`)
   const go = options.yes || !isInteractive()
     ? options.yes
-    : await confirm('install it now?', true)
+    : await confirm(t('updQ'), true, ynOpts(cliLang()))
   if (!go) {
     console.log(`  ${c.dim(RELEASE_PAGE)}`)
     return
   }
   const result = await applyUpdate({ restartDaemon: true })
-  console.log(`  ${c.ok('✓')} updated via ${result.mode} (${result.steps.join(', ')})`)
+  console.log(`  ${c.ok('✓')} ${t('updDone', { mode: result.mode, steps: result.steps.join(', ') })}`)
 }
 
 // --- daemon command ----------------------------------------------------------
@@ -443,7 +522,7 @@ async function daemonCommand(args) {
   const command = args[0] || 'status'
   const options = parseDaemonArgs(args.slice(1))
   if (options.port) process.env.PORT = String(options.port)
-  if (options.workspace) process.env.PIXCODE_WORKSPACE = options.workspace
+  if (options.workspace) process.env.HARPY_WORKSPACE = options.workspace
   const { config } = await import('./config.js')
   const { daemonStatus, healthProbe, readDaemonLog, removeAutostart, runDaemonForeground, startDaemon, stopDaemon } = await import('./daemon.js')
   const port = options.port || readCliConfig().port || config.port
@@ -457,12 +536,12 @@ async function daemonCommand(args) {
     const result = await startDaemon({ port, workspace: options.workspace })
     if (!result.started && result.listening && !options.json) {
       const probe = await healthProbe(port)
-      if (probe.pixcode) {
-        console.log(`pixcode is already serving on :${port}${probe.version ? ` (v${probe.version})` : ''}`)
-        console.log(`→ http://localhost:${port}  ·  restart with \`pixcode daemon restart\``)
+      if (probe.harpy) {
+        console.log(`harpy is already serving on :${port}${probe.version ? ` (v${probe.version})` : ''}`)
+        console.log(`→ http://localhost:${port}  ·  restart with \`harpy daemon restart\``)
         return
       }
-      console.log(`${c.warn(`port ${port} is held by another app`)} — pick another: ${c.cyan(`pixcode daemon start --port ${port + 1}`)}`)
+      console.log(`${c.warn(`port ${port} is held by another app`)} — pick another: ${c.cyan(`harpy daemon start --port ${port + 1}`)}`)
       return
     }
     printDaemonResult(result, options.json)
@@ -478,7 +557,8 @@ async function daemonCommand(args) {
     return
   }
   if (command === 'install' || command === 'enable') {
-    const merged = await firstRunWizard(options)
+    // `install` already IS the background choice — skip that one question.
+    const merged = await firstRunWizard(options, { askBackground: false })
     await installFlow(merged)
     return
   }
@@ -561,13 +641,13 @@ async function main() {
   if (options.workspace) config.workspace = path.resolve(options.workspace)
   const port = resolvePort(options.port) || config.port
   const holder = await describePort(port)
-  if (holder.kind === 'pixcode') {
-    console.log(`pixcode is already serving on :${port} (v${holder.probe.version || '?'})`)
-    console.log(`→ http://localhost:${port}  ·  manage it with \`pixcode\` or \`pixcode daemon restart\``)
+  if (holder.kind === 'harpy') {
+    console.log(`harpy is already serving on :${port} (v${holder.probe.version || '?'})`)
+    console.log(`→ http://localhost:${port}  ·  manage it with \`harpy\` or \`harpy daemon restart\``)
     return
   }
   if (holder.kind === 'foreign') {
-    console.error(`port ${port} is used by another app — pick another: pixcode start --port ${port + 1}`)
+    console.error(`port ${port} is used by another app — pick another: harpy start --port ${port + 1}`)
     process.exitCode = 1
     return
   }

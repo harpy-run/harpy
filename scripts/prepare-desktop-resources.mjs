@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 // production runtime before a desktop build so the installed app can start
 // its local HTTP/WebSocket server without requiring Node on PATH.
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const stageRoot = path.join(root, '.desktop-resources', 'pixcode')
+const stageRoot = path.join(root, '.desktop-resources', 'harpy')
 const copy = (source, destination) => {
   fs.mkdirSync(path.dirname(destination), { recursive: true })
   fs.cpSync(source, destination, { recursive: true, dereference: false })

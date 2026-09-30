@@ -5,7 +5,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
-const PATH_MARKER = '__PIXCODE_PATH__'
+const PATH_MARKER = '__HARPY_PATH__'
 
 // Service managers (systemd user units, launchd, Task Scheduler) hand us a
 // minimal PATH that misses user-level installs such as ~/.local/bin, nvm,

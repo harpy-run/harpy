@@ -11,7 +11,9 @@ export class ClaudeAdapter extends Adapter {
   buildTerminalArgs() { return [] }
   buildResumeArgs() { return ['--continue'] }
   buildArgs({ prompt } = {}) {
-    const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--input-format', 'stream-json']
+    // Skip-permissions is required for the headless memory digest to write
+    // MEMORY.md — without it every file edit stalls on an approval nobody sees.
+    const args = ['-p', '--dangerously-skip-permissions', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--input-format', 'stream-json']
     if (prompt) args.push(prompt)
     return args
   }

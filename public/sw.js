@@ -1,7 +1,7 @@
-// Service Worker for Pixcode PWA
+// Service Worker for Harpy PWA
 // Cache only manifest (needed for PWA install). HTML and JS are never pre-cached
 // so a rebuild + refresh always picks up the latest assets.
-const CACHE_NAME = 'pixcode-v7';
+const CACHE_NAME = 'harpy-v7';
 const urlsToCache = [
   '/',
   '/manifest.json',
@@ -40,7 +40,7 @@ self.addEventListener('fetch', event => {
   if (event.request.mode === 'navigate') {
     event.respondWith(
       fetch(event.request).catch(() => caches.match('/').then((cached) => cached ||
-        new Response('<h1>Pixcode offline</h1><p>Please check your connection.</p>', {
+        new Response('<h1>Harpy offline</h1><p>Please check your connection.</p>', {
           headers: { 'Content-Type': 'text/html; charset=utf-8' }
         })
       ))
@@ -91,7 +91,7 @@ self.addEventListener('push', event => {
   try {
     payload = event.data.json();
   } catch {
-    payload = { title: 'Pixcode', body: event.data.text() };
+    payload = { title: 'Harpy', body: event.data.text() };
   }
 
   const options = {
@@ -104,7 +104,7 @@ self.addEventListener('push', event => {
   };
 
   event.waitUntil(
-    self.registration.showNotification(payload.title || 'Pixcode', options)
+    self.registration.showNotification(payload.title || 'Harpy', options)
   );
 });
 

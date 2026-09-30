@@ -5,11 +5,11 @@ import { join } from 'node:path'
 import { sign } from '../server/util/jwt.js'
 
 // Activity channel smoke test: hits a running server on BASE (default :3001)
-// with a token minted from $PIXCODE_HOME/auth.json. Verifies that fs/pty
+// with a token minted from $HARPY_HOME/auth.json. Verifies that fs/pty
 // operations are recorded and pushed to activity watchers.
 const BASE = process.env.BASE || 'http://localhost:3001'
-const PIXCODE_HOME = process.env.PIXCODE_HOME || join(homedir(), '.pixcode')
-const auth = JSON.parse(readFileSync(join(PIXCODE_HOME, 'auth.json'), 'utf8'))
+const HARPY_HOME = process.env.HARPY_HOME || join(homedir(), '.harpy')
+const auth = JSON.parse(readFileSync(join(HARPY_HOME, 'auth.json'), 'utf8'))
 const token = sign(
   { sub: 'owner', role: 'owner', username: auth.username || 'admin' },
   auth.secret,

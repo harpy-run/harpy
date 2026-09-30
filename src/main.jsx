@@ -19,6 +19,11 @@ import '@vscode-elements/elements/dist/vscode-label/index.js'
 import './styles/tailwind.css'
 import './styles/global.css'
 
+// Kick the terminal font early — terminals opening on the fallback font get
+// re-measured the moment Cascadia finishes loading, so warming it now means
+// one correct measurement instead of two.
+document.fonts?.load?.('13.5px "Cascadia Code"').catch(() => {})
+
 render(<App />, document.getElementById('app'))
 
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {

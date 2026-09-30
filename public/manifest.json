@@ -1,8 +1,8 @@
 {
   "id": "/",
-  "name": "Pixcode",
-  "short_name": "Pixcode",
-  "description": "Pixcode terminal-first coding workbench for local CLI agents.",
+  "name": "Harpy",
+  "short_name": "Harpy",
+  "description": "Harpy terminal-first coding workbench for local CLI agents.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#181818",

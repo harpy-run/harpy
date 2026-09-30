@@ -49,7 +49,7 @@ export function saveCliEnv(sub, { env, home } = {}) {
     record.env = { ...(record.env || {}) }
     for (const [key, value] of Object.entries(env)) {
       if (!ENV_KEY.test(key)) throw httpError(400, `invalid env name: ${key}`)
-      if (BLOCKED.has(key.toUpperCase())) throw httpError(400, `${key} is managed by Pixcode`)
+      if (BLOCKED.has(key.toUpperCase())) throw httpError(400, `${key} is managed by Harpy`)
       if (value == null || value === '') delete record.env[key]
       else record.env[key] = String(value).slice(0, 4096)
     }

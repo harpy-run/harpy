@@ -1,7 +1,7 @@
 import WebSocket from 'ws'
 
 const BASE = process.env.BASE || 'http://127.0.0.1:3231'
-const password = process.env.PIXCODE_SMOKE_PASSWORD || 'secret123'
+const password = process.env.HARPY_SMOKE_PASSWORD || 'secret123'
 
 async function request(path, options) {
   const response = await fetch(`${BASE}${path}`, options)

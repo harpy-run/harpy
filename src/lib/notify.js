@@ -5,7 +5,7 @@ import { workspace } from '../state/app.js'
 // turns `agent exit`/`handoff` records into browser Notifications, a short
 // chime, and a title-bar dot. The server-side webhook covers "away from the
 // desk"; this covers "app is open in another tab".
-const PREF_KEY = 'pixcode.notify'
+const PREF_KEY = 'harpy.notify'
 const CHIME_FREQ = 880
 const CHIME_MS = 90
 
@@ -45,8 +45,8 @@ function arm() {
   if (armed) return
   armed = true
   subscribe()
-  window.addEventListener('pixcode:workspace-change', subscribe)
-  window.addEventListener('pixcode:ws-open', subscribe)
+  window.addEventListener('harpy:workspace-change', subscribe)
+  window.addEventListener('harpy:ws-open', subscribe)
   window.addEventListener('focus', clearTitle)
   baseTitle = document.title
 }
@@ -75,7 +75,7 @@ function onEvent(data) {
 
 function fire(title, body) {
   try {
-    const note = new Notification(title, { body, tag: 'pixcode-agent', icon: '/icons/icon-128x128.png' })
+    const note = new Notification(title, { body, tag: 'harpy-agent', icon: '/icons/icon-128x128.png' })
     note.onclick = () => { window.focus(); note.close() }
   } catch { void 0 }
   chime()

@@ -4,10 +4,10 @@ import { ws } from '../lib/ws.js'
 import { t } from '../lib/i18n.js'
 import { useEscape } from '../lib/useEscape.js'
 import { TField } from './Fields.jsx'
-import { isAdmin, setWorkspace } from '../state/app.js'
+import { bindWorkspaceToPane, draggingWorkspace, isAdmin, paneAreaVisible, paneColorIndex, projects as sharedProjects, prunePanes, setWorkspace } from '../state/app.js'
 
-const TABS_KEY = 'pixcode.workspace.tabs'
-const ACTIVE_TAB_KEY = 'pixcode.workspace.activeTab'
+const TABS_KEY = 'harpy.workspace.tabs'
+const ACTIVE_TAB_KEY = 'harpy.workspace.activeTab'
 
 function readJson(key, fallback) {
   try {
@@ -94,6 +94,8 @@ export function ProjectSwitcher() {
       // project may be one they cannot use, so land them on a granted one.
       const selected = selectedRaw && list.some((project) => project.id === selectedRaw.id) ? selectedRaw : (list[0] || null)
       setProjects(list)
+      sharedProjects.value = list
+      prunePanes()
       setCurrent(selected)
       const available = new Set(list.map((project) => project.id))
       const stored = normalizeTabs(readJson(TABS_KEY, []).filter((tab) => tab && tab.tabId && available.has(tab.projectId)))
@@ -113,7 +115,7 @@ export function ProjectSwitcher() {
       // Other panes mount in parallel with the switcher. Broadcast the
       // authoritative initial workspace so they do not briefly load another
       // workspace's files, Git state, or agent sessions.
-      window.dispatchEvent(new CustomEvent('pixcode:workspace-change', { detail: selected }))
+      window.dispatchEvent(new CustomEvent('harpy:workspace-change', { detail: selected }))
       setError('')
     } catch (requestError) { setError(requestError.message) }
   }
@@ -123,13 +125,13 @@ export function ProjectSwitcher() {
     const openFolder = () => openModal('folder')
     const cloneRepo = () => openModal('github')
     const newProject = () => { setMode('create'); setShowCreate(true) }
-    window.addEventListener('pixcode:open-folder', openFolder)
-    window.addEventListener('pixcode:clone-repo', cloneRepo)
-    window.addEventListener('pixcode:new-project', newProject)
+    window.addEventListener('harpy:open-folder', openFolder)
+    window.addEventListener('harpy:clone-repo', cloneRepo)
+    window.addEventListener('harpy:new-project', newProject)
     return () => {
-      window.removeEventListener('pixcode:open-folder', openFolder)
-      window.removeEventListener('pixcode:clone-repo', cloneRepo)
-      window.removeEventListener('pixcode:new-project', newProject)
+      window.removeEventListener('harpy:open-folder', openFolder)
+      window.removeEventListener('harpy:clone-repo', cloneRepo)
+      window.removeEventListener('harpy:new-project', newProject)
     }
   }, [])
 
@@ -144,9 +146,12 @@ export function ProjectSwitcher() {
     const record = toRecord(tab, projects)
     if (record.id === current?.id) {
       setActiveTabId(tab.tabId)
+      // bind runs before setWorkspace so agents mode can still see the
+      // workspace being left when it decides whether to open a new pane.
+      bindWorkspaceToPane(record)
       setWorkspace(record)
       persistTabs(tabList, tab.tabId)
-      window.dispatchEvent(new CustomEvent('pixcode:workspace-change', { detail: record }))
+      window.dispatchEvent(new CustomEvent('harpy:workspace-change', { detail: record }))
       return
     }
     setBusy(true)
@@ -155,9 +160,10 @@ export function ProjectSwitcher() {
       const selected = record.id === current?.id ? record : await ws.request('project', 'select', { id: record.id })
       setCurrent(selected)
       setActiveTabId(tab.tabId)
+      bindWorkspaceToPane(selected)
       setWorkspace(selected)
       persistTabs(tabList, tab.tabId)
-      window.dispatchEvent(new CustomEvent('pixcode:workspace-change', { detail: selected }))
+      window.dispatchEvent(new CustomEvent('harpy:workspace-change', { detail: selected }))
     } catch (requestError) { setError(requestError.message) }
     finally { setBusy(false) }
   }
@@ -174,17 +180,22 @@ export function ProjectSwitcher() {
       persistTabs(next, targetTab.tabId)
       return next
     })
-    setProjects((existing) => existing.some((item) => item.id === record.id) ? existing : [...existing, record])
+    setProjects((existing) => {
+      const next = existing.some((item) => item.id === record.id) ? existing : [...existing, record]
+      sharedProjects.value = next
+      return next
+    })
     setActiveTabId(targetTab.tabId)
     setShowCreate(false)
     setBusy(true)
     try {
       const selected = record.id === current?.id ? record : await ws.request('project', 'select', { id: record.id })
       setCurrent(selected)
+      bindWorkspaceToPane(selected)
       setWorkspace(selected)
       setActiveTabId(targetTab.tabId)
       persistTabs(nextTabs, targetTab.tabId)
-      window.dispatchEvent(new CustomEvent('pixcode:workspace-change', { detail: selected }))
+      window.dispatchEvent(new CustomEvent('harpy:workspace-change', { detail: selected }))
     } catch (requestError) {
       setError(requestError.message)
       setTabs((existing) => {
@@ -226,11 +237,29 @@ export function ProjectSwitcher() {
     if (nextMode === 'folder' && !browser) browse()
   }
 
+  // Dragging a workspace tab down onto the workbench opens the split-pane
+  // drop zones (WorkspaceArea): drop targets dock it beside/below another.
+  function dragStart(event, tab) {
+    const record = toRecord(tab, projects)
+    const payload = { projectId: recordKey(record), name: record.name || tab.name, path: record.path || tab.path }
+    try { event.dataTransfer.setData('application/x-harpy-workspace', JSON.stringify(payload)) } catch { void 0 }
+    event.dataTransfer.effectAllowed = 'copyMove'
+    draggingWorkspace.value = payload
+  }
+
+  function dragEnd() {
+    draggingWorkspace.value = null
+  }
+
   function closeTab(event, tabId) {
     event.stopPropagation()
     if (tabs.length <= 1) return
     const index = tabs.findIndex((tab) => tab.tabId === tabId)
+    const closed = tabs[index]
     const remaining = tabs.filter((tab) => tab.tabId !== tabId)
+    // Terminals outliving their workspace is how stray shells pile up —
+    // closing the tab kills every pty bound to that workspace.
+    if (closed?.path) ws.request('pty', 'killWorkspace', { workspace: closed.path }).catch(() => {})
     const next = tabId === activeTabId ? (remaining[index] || remaining[index - 1] || remaining[0]) : null
     setTabs(remaining)
     persistTabs(remaining, next?.tabId || activeTabId)
@@ -245,9 +274,15 @@ export function ProjectSwitcher() {
     <>
       <div class="workspace-switcher" aria-label={t('topbar.workspace')}>
         <div class="workspace-tabs" role="tablist" aria-label={t('topbar.workspace')}>
-          {tabs.map((tab) => <button class={'workspace-tab ' + (tab.tabId === activeTabId ? 'active' : '')} type="button" role="tab" aria-selected={tab.tabId === activeTabId} key={tab.tabId} onClick={() => activateTab(tab)} title={tab.path || tab.name}>
-            <span class="workspace-tab-index">{tab.slot}</span><span class="workspace-tab-copy"><strong>Workspace #{tab.slot}</strong><small>{tab.name}</small></span><span class="workspace-tab-close" role="button" tabIndex="0" onClick={(event) => closeTab(event, tab.tabId)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') closeTab(event, tab.tabId) }} aria-label={t('project.closeTab')} title={t('project.closeTab')}><X size={11} /></span>
-          </button>)}
+          {tabs.map((tab) => {
+            // Panes on screen claim color slots in leaf order; a tab whose
+            // workspace is visible wears that pane's color, the rest mute.
+            const color = paneAreaVisible.value ? paneColorIndex(tab.projectId) : -1
+            const cls = ['workspace-tab', tab.tabId === activeTabId ? 'active' : '', paneAreaVisible.value && color < 0 ? 'pane-off' : ''].filter(Boolean).join(' ')
+            return <button class={cls} type="button" role="tab" aria-selected={tab.tabId === activeTabId} key={tab.tabId} onClick={() => activateTab(tab)} title={tab.path || tab.name} draggable onDragStart={(event) => dragStart(event, tab)} onDragEnd={dragEnd} data-pane-color={color >= 0 ? color : undefined}>
+            <span class="workspace-tab-index">{tab.slot}</span><span class="workspace-tab-copy"><strong>{tab.name}</strong><small>Workspace #{tab.slot}</small></span><span class="workspace-tab-close" role="button" tabIndex="0" onClick={(event) => closeTab(event, tab.tabId)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') closeTab(event, tab.tabId) }} aria-label={t('project.closeTab')} title={t('project.closeTab')}><X size={11} /></span>
+          </button>
+          })}
         </div>
         <vscode-toolbar-button class="workspace-add-button" icon="add" onClick={() => openModal('folder')} title={t('project.newWorkspace')} aria-label={t('project.newWorkspace')}></vscode-toolbar-button>
         {error && <span class="project-error" title={error}>!</span>}

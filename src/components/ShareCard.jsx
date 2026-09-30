@@ -34,7 +34,7 @@ export function ShareCard() {
             : <small>{t('share.off')}</small>}
         </span>
       </div>
-      <vscode-button secondary onClick={() => window.dispatchEvent(new Event('pixcode:share-open'))}>{t('share.manage')}</vscode-button>
+      <vscode-button secondary onClick={() => window.dispatchEvent(new Event('harpy:share-open'))}>{t('share.manage')}</vscode-button>
     </div>
   </div>
 }

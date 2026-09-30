@@ -1,4 +1,4 @@
-name: Release Pixcode
+name: Release Harpy
 
 on:
   workflow_dispatch:
@@ -56,7 +56,7 @@ jobs:
           projectPath: .
           tauriScript: npx --yes @tauri-apps/cli@2
           tagName: ${{ inputs.tag || github.ref_name }}
-          releaseName: Pixcode ${{ inputs.tag || github.ref_name }}
+          releaseName: Harpy ${{ inputs.tag || github.ref_name }}
           releaseBody: Automated desktop builds
           # Keep the release private until every platform has uploaded its
           # installer. The publish job below verifies the expected assets.

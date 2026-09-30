@@ -16,4 +16,7 @@ src-tauri/gen/
 .desktop-resources/
 .cache/
 tmp/
+harpy-projects/
 pixcode-projects/
+.pixcode/
+.harpy/

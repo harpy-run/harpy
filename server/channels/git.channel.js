@@ -12,8 +12,8 @@ import { requireAccess, requireAdmin } from '../auth.js'
 const execFileAsync = promisify(execFile)
 const GIT_ENV = { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never' }
 
-function git(args, options = {}, requestedWorkspace, extraEnv = {}) {
-  const base = workspacePath(requestedWorkspace, '.').base
+function git(args, options = {}, requestedWorkspace, extraEnv = {}, ctx = null) {
+  const base = workspacePath(requestedWorkspace, '.', ctx).base
   return execFileAsync('git', ['-C', base, ...args], {
     env: { ...GIT_ENV, ...extraEnv },
     maxBuffer: 20 * 1024 * 1024,
@@ -64,8 +64,8 @@ function refPart(value, label) {
   return result
 }
 
-function safeRelative(value, requestedWorkspace) {
-  return workspacePath(requestedWorkspace, value).relative
+function safeRelative(value, requestedWorkspace, ctx) {
+  return workspacePath(requestedWorkspace, value, ctx).relative
 }
 
 async function remoteOperation(command, remote, branch, requestedWorkspace, ctx) {
@@ -78,13 +78,13 @@ async function remoteOperation(command, remote, branch, requestedWorkspace, ctx)
   // be injected for this invocation only.
   const cred = { args: [], env: {} }
   try {
-    const { stdout } = await git(['remote', 'get-url', remoteRef || 'origin'], {}, requestedWorkspace)
+    const { stdout } = await git(['remote', 'get-url', remoteRef || 'origin'], {}, requestedWorkspace, {}, ctx)
     const found = credentialFor(ctx, stdout.trim())
     cred.args.push(...found.args)
     Object.assign(cred.env, found.env)
   } catch { /* no configured remote — let the real op report the failure */ }
   try {
-    const { stdout, stderr } = await git([...cred.args, ...args], { timeout: 120_000 }, requestedWorkspace, cred.env)
+    const { stdout, stderr } = await git([...cred.args, ...args], { timeout: 120_000 }, requestedWorkspace, cred.env, ctx)
     try { recordActivity(workspacePath(requestedWorkspace, '.', ctx).base, 'git', { op: command, user: ctx?.principal?.username || '' }) } catch { void 0 }
     return { ok: true, output: scrubCredentials(`${stdout}${stderr}`, cred.env) }
   } catch (error) {
@@ -94,22 +94,22 @@ async function remoteOperation(command, remote, branch, requestedWorkspace, ctx)
   }
 }
 
-async function isTracked(filePath, requestedWorkspace) {
+async function isTracked(filePath, requestedWorkspace, ctx) {
   try {
-    await git(['ls-files', '--error-unmatch', '--', filePath], {}, requestedWorkspace)
+    await git(['ls-files', '--error-unmatch', '--', filePath], {}, requestedWorkspace, {}, ctx)
     return true
   } catch {
     return false
   }
 }
 
-async function untrackedDiff(filePath, requestedWorkspace) {
-  const base = workspacePath(requestedWorkspace, '.').base
+async function untrackedDiff(filePath, requestedWorkspace, ctx) {
+  const base = workspacePath(requestedWorkspace, '.', ctx).base
   const absolute = path.resolve(base, filePath)
   const relative = path.relative(base, absolute) || path.basename(absolute)
   try {
     // os.devNull is NUL on Windows — /dev/null only exists on POSIX.
-    await git(['diff', '--no-index', '--no-color', '--', os.devNull, relative], {}, requestedWorkspace)
+    await git(['diff', '--no-index', '--no-color', '--', os.devNull, relative], {}, requestedWorkspace, {}, ctx)
     return ''
   } catch (error) {
     // `git diff --no-index` returns exit code 1 when the files differ; its
@@ -119,15 +119,15 @@ async function untrackedDiff(filePath, requestedWorkspace) {
   }
 }
 
-async function untrackedFiles(requestedWorkspace) {
-  const { stdout } = await git(['status', '--porcelain=v2', '--branch', '--untracked-files=all'], {}, requestedWorkspace)
+async function untrackedFiles(requestedWorkspace, ctx) {
+  const { stdout } = await git(['status', '--porcelain=v2', '--branch', '--untracked-files=all'], {}, requestedWorkspace, {}, ctx)
   return parseStatus(stdout).files.filter((file) => file.untracked).map((file) => file.path)
 }
 
-async function baseline(filePath, staged, head = false, requestedWorkspace) {
+async function baseline(filePath, staged, head = false, requestedWorkspace, ctx) {
   const revision = staged || head ? `HEAD:${filePath}` : `:0:${filePath}`
   try {
-    const { stdout } = await git(['show', revision], {}, requestedWorkspace)
+    const { stdout } = await git(['show', revision], {}, requestedWorkspace, {}, ctx)
     return { content: stdout, exists: true, source: staged || head ? 'head' : 'index' }
   } catch (error) {
     // Missing blobs represent untracked files (or a repository with no HEAD);
@@ -142,7 +142,7 @@ export const gitChannel = {
     async status(ctx, { workspace } = {}) {
       workspacePath(workspace, '.', ctx)
       try {
-        const { stdout } = await git(['status', '--porcelain=v2', '--branch', '--untracked-files=all'], {}, workspace)
+        const { stdout } = await git(['status', '--porcelain=v2', '--branch', '--untracked-files=all'], {}, workspace, {}, ctx)
         return parseStatus(stdout)
       } catch (error) {
         const detail = `${error.stdout || ''}${error.stderr || ''}`.trim()
@@ -156,31 +156,31 @@ export const gitChannel = {
       if (head) args.push('HEAD')
       else if (staged) args.push('--cached')
       if (filePath) {
-        const safePath = safeRelative(filePath, workspace)
+        const safePath = safeRelative(filePath, workspace, ctx)
         // Git does not include untracked files in a normal diff. Compare them
         // against /dev/null so the Git panel can show the complete new file.
-        if (!staged && !(await isTracked(safePath, workspace))) return { diff: await untrackedDiff(safePath, workspace) }
+        if (!staged && !(await isTracked(safePath, workspace, ctx))) return { diff: await untrackedDiff(safePath, workspace, ctx) }
         args.push('--', safePath)
       }
       let stdout
       try {
-        ({ stdout } = await git(args, {}, workspace))
+        ({ stdout } = await git(args, {}, workspace, {}, ctx))
       } catch (error) {
         // A repository without a commit has no HEAD yet. In that case a
         // staged diff is still useful as a fallback, while a working-tree
         // diff can continue to use the regular index comparison.
         if (!head || error.code !== 128) throw error
         const fallback = ['diff', '--no-color', ...(staged ? ['--cached'] : [])]
-        if (filePath) fallback.push('--', safeRelative(filePath, workspace))
-        const fallbackResult = await git(fallback, {}, workspace)
+        if (filePath) fallback.push('--', safeRelative(filePath, workspace, ctx))
+        const fallbackResult = await git(fallback, {}, workspace, {}, ctx)
         stdout = fallbackResult.stdout
       }
       if (staged || head || filePath) return { diff: stdout }
       // A plain git diff omits untracked files. Append a /dev/null patch so
       // callers asking for the complete workspace diff see new files too.
       const additions = []
-      for (const untrackedPath of await untrackedFiles(workspace)) {
-        const patch = await untrackedDiff(untrackedPath, workspace)
+      for (const untrackedPath of await untrackedFiles(workspace, ctx)) {
+        const patch = await untrackedDiff(untrackedPath, workspace, ctx)
         if (patch) additions.push(patch)
       }
       return { diff: stdout + additions.join('') }
@@ -189,20 +189,20 @@ export const gitChannel = {
     async baseline(ctx, { path: filePath, staged = false, head = false, workspace } = {}) {
       workspacePath(workspace, '.', ctx)
       if (!filePath) throw httpError(400, 'path required')
-      return baseline(safeRelative(filePath, workspace), staged, head, workspace)
+      return baseline(safeRelative(filePath, workspace, ctx), staged, head, workspace, ctx)
     },
 
     async stage(ctx, { paths = [], workspace } = {}) {
       workspacePath(workspace, '.', ctx)
       if (!Array.isArray(paths) || paths.length === 0) throw httpError(400, 'paths required')
-      await git(['add', '--', ...paths.map((item) => safeRelative(item, workspace))], {}, workspace)
+      await git(['add', '--', ...paths.map((item) => safeRelative(item, workspace, ctx))], {}, workspace, {}, ctx)
       return { ok: true }
     },
 
     async unstage(ctx, { paths = [], workspace } = {}) {
       workspacePath(workspace, '.', ctx)
       if (!Array.isArray(paths) || paths.length === 0) throw httpError(400, 'paths required')
-      await git(['reset', 'HEAD', '--', ...paths.map((item) => safeRelative(item, workspace))], {}, workspace)
+      await git(['reset', 'HEAD', '--', ...paths.map((item) => safeRelative(item, workspace, ctx))], {}, workspace, {}, ctx)
       return { ok: true }
     },
 
@@ -212,8 +212,8 @@ export const gitChannel = {
       try {
         // `all` mirrors VS Code's commit button: stage every change first so
         // the user never has to think about the staging area.
-        if (all) await git(['add', '-A'], {}, workspace)
-        const { stdout, stderr } = await git([...identityArgs(ctx), 'commit', '-m', String(message)], {}, workspace)
+        if (all) await git(['add', '-A'], {}, workspace, {}, ctx)
+        const { stdout, stderr } = await git([...identityArgs(ctx), 'commit', '-m', String(message)], {}, workspace, {}, ctx)
         recordActivity(workspacePath(workspace, '.', ctx).base, 'git', { op: 'commit', user: ctx?.principal?.username || '' })
         return { ok: true, output: `${stdout}${stderr}` }
       } catch (error) {
@@ -224,7 +224,7 @@ export const gitChannel = {
 
     async init(ctx, { workspace } = {}) {
       const { base } = workspacePath(workspace, '.', ctx)
-      const { stdout, stderr } = await git(['init'], {}, workspace)
+      const { stdout, stderr } = await git(['init'], {}, workspace, {}, ctx)
       recordActivity(base, 'git', { op: 'init', user: ctx?.principal?.username || '' })
       return { ok: true, output: `${stdout}${stderr}` }
     },
@@ -232,12 +232,12 @@ export const gitChannel = {
     async discard(ctx, { path: filePath, workspace } = {}) {
       const { base } = workspacePath(workspace, '.', ctx)
       if (!filePath) throw httpError(400, 'path required')
-      const safePath = safeRelative(filePath, workspace)
-      if (await isTracked(safePath, workspace)) {
+      const safePath = safeRelative(filePath, workspace, ctx)
+      if (await isTracked(safePath, workspace, ctx)) {
         // Restores both index and worktree so a staged edit also disappears.
-        await git(['restore', '--staged', '--worktree', '--', safePath], {}, workspace)
+        await git(['restore', '--staged', '--worktree', '--', safePath], {}, workspace, {}, ctx)
       } else {
-        await git(['clean', '-f', '--', safePath], {}, workspace)
+        await git(['clean', '-f', '--', safePath], {}, workspace, {}, ctx)
       }
       recordActivity(base, 'git', { op: 'discard', files: [safePath], user: ctx?.principal?.username || '' })
       return { ok: true }
@@ -246,7 +246,7 @@ export const gitChannel = {
     async log(ctx, { workspace, limit = 12 } = {}) {
       workspacePath(workspace, '.', ctx)
       try {
-        const { stdout } = await git(['log', '--format=%h%x00%s%x00%an%x00%cr', '-n', String(Math.min(Number(limit) || 12, 50))], {}, workspace)
+        const { stdout } = await git(['log', '--format=%h%x00%s%x00%an%x00%cr', '-n', String(Math.min(Number(limit) || 12, 50))], {}, workspace, {}, ctx)
         const commits = stdout.split('\n').filter(Boolean).map((line) => {
           const [short, subject, author, ago] = line.split('\x00')
           return { short, subject, author, ago }

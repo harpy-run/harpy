@@ -25,6 +25,11 @@ const GIT_WATCH_SKIP = new Set(['objects', 'logs', 'hooks', 'info', 'lfs', 'modu
 // base(realpath) -> { subscribers: Map<ctx, workspaceArg>, dirs: Map<abs, FSWatcher>, pending: Map<rel,kind>, git, timer, pins }
 const watchers = new Map()
 
+// Non-client listeners (automations) that need every flushed fs event for a
+// workspace, independent of which sockets subscribe.
+const fsListeners = new Set()
+export function registerFsListener(fn) { fsListeners.add(fn); return () => fsListeners.delete(fn) }
+
 // Paths written through the fs ops are recorded with the acting user; the
 // watcher flush would log the same disk change a moment later, so the flush
 // skips any path an op just attributed.
@@ -53,6 +58,9 @@ function flushWatch(entry) {
   const git = entry.git
   entry.git = false
   if (!files.length && !git) return
+  for (const listener of fsListeners) {
+    try { listener(entry.base, files, git) } catch { void 0 }
+  }
   // The activity timeline gets one compact record per flush — the file list
   // itself stays in the fs:changed frame, the log only keeps what it needs.
   // Paths an fs op just wrote are skipped: they already carry the user.

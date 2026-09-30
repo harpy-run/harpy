@@ -13,7 +13,7 @@ const wrap = (code) => (text) => (noColor ? String(text) : paint(code)(text))
 export const c = {
   bold: wrap(1),
   dim: wrap(2),
-  accent: wrap(35),   // pixcode indigo → magenta reads well on dark terminals
+  accent: wrap(35),   // harpy indigo → magenta reads well on dark terminals
   ok: wrap(32),
   warn: wrap(33),
   err: wrap(31),
@@ -49,12 +49,21 @@ export async function ask(question, fallback = '') {
   }
 }
 
-export async function confirm(question, fallback = true) {
-  const hint = fallback ? 'Y/n' : 'y/N'
+// `opts.note` prints as a dim footnote under the question; `yes`/`no`/`hint`
+// let the caller pass locale words (cli-i18n) so e.g. `e`/`evet` answers a
+// Turkish prompt. An unrecognized non-empty answer falls back too — a typo
+// should never silently flip a default-yes choice to no.
+export async function confirm(question, fallback = true, { note, yes = ['y', 'yes'], no = ['n', 'no'], hint } = {}) {
+  if (note) console.log(`  ${c.dim(note)}`)
+  const keys = hint || (fallback ? `${yes[0][0].toUpperCase()}/${no[0][0]}` : `${yes[0][0]}/${no[0][0].toUpperCase()}`)
+  const yesSet = new Set(yes.map((w) => w.toLowerCase()))
+  const noSet = new Set(no.map((w) => w.toLowerCase()))
   try {
-    const answer = (await prompt().question(`  ${question} ${c.dim(`[${hint}]`)}: `)).trim().toLowerCase()
+    const answer = (await prompt().question(`  ${question} ${c.dim(`[${keys}]`)}: `)).trim().toLowerCase()
     if (!answer) return fallback
-    return answer === 'y' || answer === 'yes'
+    if (yesSet.has(answer)) return true
+    if (noSet.has(answer)) return false
+    return fallback
   } catch {
     return fallback
   }

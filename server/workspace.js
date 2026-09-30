@@ -6,11 +6,21 @@ import { accessFor } from './auth.js'
 
 const knownWorkspaces = new Set()
 
+// Per-user active workspace: projects.js installs this resolver at module
+// load (it owns workspace.json). Keeping the hook here avoids a
+// projects↔workspace import cycle.
+let userWorkspaceResolver = null
+export function setUserWorkspaceResolver(fn) { userWorkspaceResolver = fn }
+
 export function registerWorkspace(workspacePath) {
   if (!workspacePath) return ''
   const resolved = path.resolve(String(workspacePath))
   knownWorkspaces.add(resolved)
   return resolved
+}
+
+export function listKnownWorkspaces() {
+  return [...knownWorkspaces]
 }
 
 // The stable id a workspace root maps to in the project picker and in
@@ -29,7 +39,7 @@ export function projectIdForPath(resolved) {
 // members may only touch workspaces an admin granted them.
 export function workspaceRoot(requested, ctx) {
   const candidate = requested == null || String(requested).trim() === ''
-    ? config.workspace
+    ? (ctx && userWorkspaceResolver?.(ctx)) || config.workspace
     : String(requested)
   if (!candidate) throw httpError(409, 'workspace is not initialized')
   const resolved = path.resolve(candidate)
@@ -51,15 +61,15 @@ export function workspaceRoot(requested, ctx) {
   return resolved
 }
 
-export function workspacePath(requestedWorkspace, relativePath = '.', ctx) {
+export function workspacePath(requestedWorkspace, relativePath = '.', ctx, { allowOutside = false } = {}) {
   const base = workspaceRoot(requestedWorkspace, ctx)
   const value = String(relativePath || '.')
   if (value.includes('\0') || value.includes('\n')) throw httpError(400, 'path is invalid')
   const resolved = path.resolve(base, value)
-  if (resolved !== base && !resolved.startsWith(`${base}${path.sep}`)) throw httpError(403, 'path outside workspace')
+  if (!allowOutside && resolved !== base && !resolved.startsWith(`${base}${path.sep}`)) throw httpError(403, 'path outside workspace')
   return { base, relative: value, resolved }
 }
 
-export function workspaceCwd(requestedWorkspace, cwd = '.', ctx) {
-  return workspacePath(requestedWorkspace, cwd, ctx).resolved
+export function workspaceCwd(requestedWorkspace, cwd = '.', ctx, opts) {
+  return workspacePath(requestedWorkspace, cwd, ctx, opts).resolved
 }

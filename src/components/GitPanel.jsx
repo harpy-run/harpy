@@ -2,11 +2,11 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import { Copy, FolderGit2, GitBranch, Github, Undo2 } from '../lib/icons.jsx'
 import { getFileIcon } from './FileTree.jsx'
 import { TField } from './Fields.jsx'
-import { ws } from '../lib/ws.js'
+import { ws, isConnectionError } from '../lib/ws.js'
 import { t } from '../lib/i18n.js'
 import { isAdmin, openFile, workspace } from '../state/app.js'
 
-const GITHUB_TOKEN_URL = 'https://github.com/settings/tokens/new?scopes=repo,workflow&description=Pixcode'
+const GITHUB_TOKEN_URL = 'https://github.com/settings/tokens/new?scopes=repo,workflow&description=Harpy'
 
 function statusBadge(file) {
   if (file.untracked) return { label: 'A', className: 'added', title: t('git.statusAdded') }
@@ -376,17 +376,20 @@ export function GitPanel() {
     })
     const interval = window.setInterval(refreshIfIdle, 15_000)
     ws.request('git', 'account', {}).then(setAccount).catch(() => {})
-    window.addEventListener('pixcode:ws-open', refreshIfIdle)
-    window.addEventListener('pixcode:workspace-change', workspaceChange)
-    window.addEventListener('pixcode:workspace-data-change', refreshIfIdle)
+    const clearStaleError = () => setError((e) => isConnectionError(e) ? '' : e)
+    window.addEventListener('harpy:ws-open', refreshIfIdle)
+    window.addEventListener('harpy:ws-open', clearStaleError)
+    window.addEventListener('harpy:workspace-change', workspaceChange)
+    window.addEventListener('harpy:workspace-data-change', refreshIfIdle)
     refresh()
     return () => {
       fsPush()
       window.clearTimeout(fsTimer.current)
       window.clearInterval(interval)
-      window.removeEventListener('pixcode:ws-open', refreshIfIdle)
-      window.removeEventListener('pixcode:workspace-change', workspaceChange)
-      window.removeEventListener('pixcode:workspace-data-change', refreshIfIdle)
+      window.removeEventListener('harpy:ws-open', refreshIfIdle)
+      window.removeEventListener('harpy:ws-open', clearStaleError)
+      window.removeEventListener('harpy:workspace-change', workspaceChange)
+      window.removeEventListener('harpy:workspace-data-change', refreshIfIdle)
     }
   }, [])
 
@@ -437,7 +440,7 @@ export function GitPanel() {
           <p>{t('git.noRepositoryDescription')}</p>
           <div class="git-welcome-actions">
             <vscode-button icon="repo" onClick={() => run('init')} disabled={!!busy}>{t('git.initRepo')}</vscode-button>
-            <vscode-button secondary icon="repo-clone" onClick={() => window.dispatchEvent(new Event('pixcode:clone-repo'))}>{t('git.openRemote')}</vscode-button>
+            <vscode-button secondary icon="repo-clone" onClick={() => window.dispatchEvent(new Event('harpy:clone-repo'))}>{t('git.openRemote')}</vscode-button>
           </div>
         </div>
       ) : (

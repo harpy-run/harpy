@@ -10,7 +10,9 @@ export class CodexAdapter extends Adapter {
 
   buildTerminalArgs() { return [] }
   buildResumeArgs() { return ['resume', '--last'] }
-  buildArgs({ prompt } = {}) { return ['exec', '--json', ...(prompt ? [prompt] : [])] }
+  // Digest runs from a scratch dir (not a git repo) and writes an absolute
+  // path — skip the repo check and lift the workspace-write sandbox.
+  buildArgs({ prompt } = {}) { return ['exec', '--json', '--skip-git-repo-check', '--sandbox', 'danger-full-access', ...(prompt ? [prompt] : [])] }
 
   normalizeLine(line) {
     let object

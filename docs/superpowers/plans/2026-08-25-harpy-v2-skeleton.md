@@ -1,14 +1,14 @@
-# Pixcode v2 Skeleton Implementation Plan
+# Harpy v2 Skeleton Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the legacy pixcode codebase with a minimal, fast, mobile-friendly, self-hosted AI coding workbench (web + Tauri 2 desktop), supporting 6 coding agents through one unified protocol.
+**Goal:** Replace the legacy harpy codebase with a minimal, fast, mobile-friendly, self-hosted AI coding workbench (web + Tauri 2 desktop), supporting 6 coding agents through one unified protocol.
 
 **Architecture:** Single npm package. Zero-framework Node backend (`node:http` + `ws` + `node-pty` only) with a multiplexed WebSocket and one `AgentAdapter` interface normalized to a single event schema. Preact + CodeMirror 6 + xterm.js frontend with a VibeVim-style 3-pane desktop layout and bottom-tab mobile layout. Hand-rolled i18n (tr/en).
 
 **Tech Stack:** Node 22+ ESM, Preact 10, Vite 6, CodeMirror 6, @xterm/xterm, node-pty, ws, Tauri 2 (desktop). No TypeScript build — plain JSX + JSDoc where helpful.
 
-**Authoritative spec:** `docs/superpowers/specs/2026-08-25-pixcode-v2-redesign-design.md`. All other files under `docs/superpowers/plans/` and `docs/superpowers/specs/` are obsolete v1 artifacts (kept in git history) — ignore them.
+**Authoritative spec:** `docs/superpowers/specs/2026-08-25-harpy-v2-redesign-design.md`. All other files under `docs/superpowers/plans/` and `docs/superpowers/specs/` are obsolete v1 artifacts (kept in git history) — ignore them.
 
 ## Global Constraints
 
@@ -16,8 +16,8 @@
 - Runtime backend deps are exactly `ws` and `node-pty`. No Express, no jsonwebtoken, no bcrypt — use `node:crypto` (scrypt for passwords, HMAC-SHA256 for JWT).
 - Frontend runtime libs go in `devDependencies` (they are bundled by Vite into `dist/`). The published npm package ships `dist/` + `server/` only (see `package.json` `files`).
 - Default server port: `process.env.PORT || 3210`. Dev Vite port: 5199, proxying `/api` and `/ws` to the backend.
-- Workspace root = `process.env.PIXCODE_WORKSPACE || process.cwd()` at server start. All filesystem channel ops are confined to this root.
-- Data dir = `~/.pixcode` (`process.env.PIXCODE_HOME` overrides). `auth.json` stored there with mode `0o600`.
+- Workspace root = `process.env.HARPY_WORKSPACE || process.cwd()` at server start. All filesystem channel ops are confined to this root.
+- Data dir = `~/.harpy` (`process.env.HARPY_HOME` overrides). `auth.json` stored there with mode `0o600`.
 - Verification gate (no test runner per spec): `npm run lint` + `npm run build` + a smoke script hitting HTTP endpoints + manual UI check. Each task ends with a commit.
 - Commit style: Conventional Commits (`feat:`, `fix:`, `chore:`, `docs:`). Single-line subjects.
 - No code comments unless explicitly requested by the user.
@@ -28,18 +28,18 @@
 The following files already exist on disk from the scaffolding phase and must be committed as the first step:
 
 - `.gitignore`
-- `LICENSE` (MIT, Copyright (c) 2026 Ali Comert and Pixcode Contributors)
+- `LICENSE` (MIT, Copyright (c) 2026 Ali Comert and Harpy Contributors)
 - `eslint.config.js` (flat config, js recommended, browser+node globals, ignores `dist/`, `node_modules/`, `src-tauri/target/`)
 - `index.html` (dark bg, viewport with `viewport-fit=cover`, `#app` root, `/src/main.jsx`)
-- `package.json` (name `@pixelbyte-software/pixcode`, version `2.0.0-alpha.1`, bin `pixcode`, scripts `dev/server/start/build/preview/lint`, deps `ws`+`node-pty`, devDeps: preact, @preact/preset-vite, @preact/signals, all @codemirror/* packages, @xterm/*, vite, eslint, @eslint/js, globals)
+- `package.json` (name `harpy-run`, version `2.0.0-alpha.1`, bin `harpy`, scripts `dev/server/start/build/preview/lint`, deps `ws`+`node-pty`, devDeps: preact, @preact/preset-vite, @preact/signals, all @codemirror/* packages, @xterm/*, vite, eslint, @eslint/js, globals)
 - `vite.config.js` (preact preset, proxy `/api`+`/ws`, manualChunks `cm`/`langs`/`xterm`)
-- `docs/superpowers/specs/2026-08-25-pixcode-v2-redesign-design.md` (already committed)
+- `docs/superpowers/specs/2026-08-25-harpy-v2-redesign-design.md` (already committed)
 
 - [ ] **Step 1: Commit the existing scaffold**
 
 ```bash
 git add .gitignore LICENSE eslint.config.js index.html package.json vite.config.js
-git commit -m "chore: scaffold pixcode v2 project root"
+git commit -m "chore: scaffold harpy v2 project root"
 ```
 
 ---
@@ -47,10 +47,10 @@ git commit -m "chore: scaffold pixcode v2 project root"
 ## File Structure (target layout)
 
 ```
-pixcode/
+harpy/
 ├── server/
 │   ├── index.js              # HTTP + WS boot, listen, signal handlers
-│   ├── cli.js                # `pixcode start|status|version` CLI
+│   ├── cli.js                # `harpy start|status|version` CLI
 │   ├── config.js             # port, host, paths (workspace, dataDir, distDir)
 │   ├── router.js             # tiny method+path router with params + body parse
 │   ├── static.js             # serve dist/ with mime map + SPA fallback
@@ -122,10 +122,10 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export const config = {
-  port: Number(process.env.PORT || process.env.PIXCODE_PORT || 3210),
-  host: process.env.PIXCODE_HOST || '0.0.0.0',
-  dataDir: process.env.PIXCODE_HOME || path.join(os.homedir(), '.pixcode'),
-  workspace: process.env.PIXCODE_WORKSPACE || process.cwd(),
+  port: Number(process.env.PORT || process.env.HARPY_PORT || 3210),
+  host: process.env.HARPY_HOST || '0.0.0.0',
+  dataDir: process.env.HARPY_HOME || path.join(os.homedir(), '.harpy'),
+  workspace: process.env.HARPY_WORKSPACE || process.cwd(),
   distDir: fileURLToPath(new URL('../dist/', import.meta.url))
 }
 
@@ -299,7 +299,7 @@ export function verifyToken(token) {
 }
 
 export function issueApiKey(name) {
-  const raw = 'px_' + crypto.randomBytes(24).toString('base64url')
+  const raw = 'hp_' + crypto.randomBytes(24).toString('base64url')
   const id = crypto.randomUUID()
   const record = {
     id,
@@ -338,7 +338,7 @@ export function checkApiKey(key) {
 export function authMiddleware(req) {
   const auth = req.headers['authorization'] || ''
   const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : null
-  if (bearer && bearer.startsWith('px_')) {
+  if (bearer && bearer.startsWith('hp_')) {
     if (checkApiKey(bearer)) return { sub: 'owner', role: 'owner' }
     return null
   }
@@ -349,7 +349,7 @@ export function authMiddleware(req) {
 }
 
 export function authRoutes(router) {
-  router.get('/api/health', () => ({ ok: true, name: 'pixcode', version: VERSION, setupRequired: setupRequired() }), { auth: false })
+  router.get('/api/health', () => ({ ok: true, name: 'harpy', version: VERSION, setupRequired: setupRequired() }), { auth: false })
   router.post('/api/auth/setup', async (req) => setup((await readBody(req)).password), { auth: false })
   router.post('/api/auth/login', async (req) => login((await readBody(req)).password), { auth: false })
   router.get('/api/auth/me', (req) => ({ principal: req.principal }))
@@ -521,7 +521,7 @@ export function createHttpServer() {
 export async function startServer() {
   const { server } = createHttpServer()
   server.listen(config.port, config.host, () => {
-    console.log(`pixcode v${VERSION} listening on http://${config.host}:${config.port}`)
+    console.log(`harpy v${VERSION} listening on http://${config.host}:${config.port}`)
   })
   for (const sig of ['SIGINT', 'SIGTERM']) {
     process.on(sig, () => { server.close(() => process.exit(0)) })
@@ -546,7 +546,7 @@ Expected: no errors.
 - [ ] **Step 5: Smoke check (no UI yet, but server must boot)**
 
 Run: `node server/index.js & ; sleep 1 ; curl -s http://localhost:3210/api/health ; kill %1`
-Expected: `{"ok":true,"name":"pixcode","version":"2.0.0-alpha.1","setupRequired":true}`
+Expected: `{"ok":true,"name":"harpy","version":"2.0.0-alpha.1","setupRequired":true}`
 
 - [ ] **Step 6: Commit**
 
@@ -1406,8 +1406,8 @@ function lanIps() {
 }
 
 function printUsage() {
-  console.log(`pixcode v${VERSION}
-Usage: pixcode <command>
+  console.log(`harpy v${VERSION}
+Usage: harpy <command>
 
 Commands:
   start [--port N] [--workspace PATH]   Start the server (default)
@@ -1429,7 +1429,7 @@ async function status() {
 async function start(args) {
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--port') process.env.PORT = args[++i]
-    if (args[i] === '--workspace') process.env.PIXCODE_WORKSPACE = args[++i]
+    if (args[i] === '--workspace') process.env.HARPY_WORKSPACE = args[++i]
   }
   const { startServer } = await import('./index.js')
   await startServer()
@@ -1476,7 +1476,7 @@ Expected: setup returns a token; `/api/auth/me` returns the principal; no crashe
 
 ```bash
 git add server/
-git commit -m "feat(server): add agent channel, finalize boot, add pixcode CLI"
+git commit -m "feat(server): add agent channel, finalize boot, add harpy CLI"
 ```
 
 ---
@@ -1510,7 +1510,7 @@ render(<App />, document.getElementById('app'))
 - [ ] **Step 2: Write `src/lib/api.js`**
 
 ```js
-const TOKEN_KEY = 'pixcode.token'
+const TOKEN_KEY = 'harpy.token'
 
 export function getToken() {
   return localStorage.getItem(TOKEN_KEY) || ''
@@ -1615,12 +1615,12 @@ import tr from '../i18n/locales/tr.json'
 import en from '../i18n/locales/en.json'
 
 const dictionaries = { tr, en }
-const stored = localStorage.getItem('pixcode.locale') || (navigator.language || 'tr').startsWith('tr') ? 'tr' : 'en'
-export const locale = signal(localStorage.getItem('pixcode.locale') || 'tr')
+const stored = localStorage.getItem('harpy.locale') || (navigator.language || 'tr').startsWith('tr') ? 'tr' : 'en'
+export const locale = signal(localStorage.getItem('harpy.locale') || 'tr')
 
 export function setLocale(lang) {
   locale.value = lang
-  localStorage.setItem('pixcode.locale', lang)
+  localStorage.setItem('harpy.locale', lang)
   document.documentElement.lang = lang
 }
 
@@ -1637,7 +1637,7 @@ setLocale(locale.value)
 
 ```json
 {
-  "app.title": "Pixcode",
+  "app.title": "Harpy",
   "auth.setup.title": "Kurulum",
   "auth.setup.password": "Şifre belirle",
   "auth.setup.submit": "Kaydet ve giriş yap",
@@ -1676,7 +1676,7 @@ setLocale(locale.value)
 
 ```json
 {
-  "app.title": "Pixcode",
+  "app.title": "Harpy",
   "auth.setup.title": "Setup",
   "auth.setup.password": "Set a password",
   "auth.setup.submit": "Save and sign in",
@@ -1716,7 +1716,7 @@ setLocale(locale.value)
 ```js
 import { signal, computed } from '@preact/signals'
 
-export const theme = signal(localStorage.getItem('pixcode.theme') || 'dark')
+export const theme = signal(localStorage.getItem('harpy.theme') || 'dark')
 export const mobileTab = signal('files')
 export const activeAgent = signal('')
 export const openFiles = signal([])
@@ -1726,7 +1726,7 @@ export const gitChanges = signal([])
 
 export function setTheme(t) {
   theme.value = t
-  localStorage.setItem('pixcode.theme', t)
+  localStorage.setItem('harpy.theme', t)
   document.documentElement.dataset.theme = t
 }
 setTheme(theme.value)
@@ -1857,7 +1857,7 @@ export function App() {
   const [state, setState] = useState({ loading: true, setupRequired: false, authed: false })
   useEffect(() => {
     api.health().then((h) => {
-      setState({ loading: false, setupRequired: h.setupRequired, authed: !!localStorage.getItem('pixcode.token') })
+      setState({ loading: false, setupRequired: h.setupRequired, authed: !!localStorage.getItem('harpy.token') })
     }).catch(() => setState({ loading: true, setupRequired: false, authed: false }))
   }, [])
   if (state.loading) return <div style="padding:20px">loading…</div>
@@ -2525,7 +2525,7 @@ git commit -m "feat(web): add xterm terminal tabs wired to pty channel"
 
 ```toml
 [package]
-name = "pixcode"
+name = "harpy"
 version = "2.0.0-alpha.1"
 edition = "2021"
 
@@ -2556,7 +2556,7 @@ fn main() {
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    pixcode_lib::run()
+    harpy_lib::run()
 }
 ```
 
@@ -2586,7 +2586,7 @@ Update `src-tauri/Cargo.toml` to declare the lib:
 
 ```toml
 [lib]
-name = "pixcode_lib"
+name = "harpy_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 ```
 
@@ -2595,9 +2595,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 ```json
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Pixcode",
+  "productName": "Harpy",
   "version": "2.0.0-alpha.1",
-  "identifier": "com.pixcode.app",
+  "identifier": "run.harpy.app",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5199",
@@ -2607,7 +2607,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
   "app": {
     "windows": [
       {
-        "title": "Pixcode",
+        "title": "Harpy",
         "width": 1280,
         "height": 800,
         "minWidth": 320,
@@ -2716,7 +2716,7 @@ Expected: `SMOKE OK`.
 ```bash
 node server/index.js &
 ```
-Open `http://localhost:3210` in a browser (and on a phone on the same network via the LAN IP printed by `pixcode start`). Verify:
+Open `http://localhost:3210` in a browser (and on a phone on the same network via the LAN IP printed by `harpy start`). Verify:
 1. Setup screen appears → set a password → enters the workbench.
 2. File tree shows the workspace contents; clicking a file opens it in the editor.
 3. Editor: type, Ctrl/Cmd+S saves (refresh page → content persists).
@@ -2745,4 +2745,4 @@ git commit -m "chore: add smoke script and verified skeleton"
 
 ## Execution Handoff
 
-Plan complete and saved to `docs/superpowers/plans/2026-08-25-pixcode-v2-skeleton.md`. The user has indicated they will execute this with Codex directly, so the inline/subagent execution choice is theirs to make in that environment. Run tasks in order; each task is self-contained and ends with a commit.
+Plan complete and saved to `docs/superpowers/plans/2026-08-25-harpy-v2-skeleton.md`. The user has indicated they will execute this with Codex directly, so the inline/subagent execution choice is theirs to make in that environment. Run tasks in order; each task is self-contained and ends with a commit.

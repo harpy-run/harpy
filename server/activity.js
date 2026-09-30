@@ -4,7 +4,7 @@ import path from 'node:path'
 import { config } from './config.js'
 import { accessAlive } from './auth.js'
 
-// Per-workspace activity log: a JSONL file under $PIXCODE_HOME/activity that
+// Per-workspace activity log: a JSONL file under $HARPY_HOME/activity that
 // records who did what — file changes, terminal and agent lifecycles, git
 // operations — so the Activity view can answer "what happened here" without
 // a database. Kept small by halving the file once it passes MAX_BYTES.

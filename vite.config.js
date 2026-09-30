@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite'
 import tailwindcss from '@tailwindcss/vite'
 
-const backend = `http://localhost:${process.env.PORT || process.env.PIXCODE_PORT || 3001}`
+const backend = `http://localhost:${process.env.PORT || process.env.HARPY_PORT || 3001}`
 
 export default defineConfig({
   plugins: [tailwindcss()],

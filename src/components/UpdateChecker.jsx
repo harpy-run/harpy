@@ -143,10 +143,10 @@ export function UpdateChecker({ detailed = false }) {
     </button>
     {detailed && state.status === 'error' && <span class="update-error" title={state.error}>{t('update.unavailable')}</span>}
     {open && release?.updateAvailable && <div class="update-modal-backdrop" role="presentation" onClick={(event) => { if (event.target === event.currentTarget && !updating) setOpen(false) }}>
-      <section class="update-modal" role="dialog" aria-modal="true" aria-labelledby="pixcode-update-title">
+      <section class="update-modal" role="dialog" aria-modal="true" aria-labelledby="harpy-update-title">
         <vscode-toolbar-button class="update-modal-close" icon="close" onClick={() => !updating && setOpen(false)} title={t('update.dismiss')} aria-label={t('update.dismiss')}></vscode-toolbar-button>
         <span class="update-eyebrow">{t('update.eyebrow')}</span>
-        <h2 id="pixcode-update-title">{t('update.available', { version: release.version })}</h2>
+        <h2 id="harpy-update-title">{t('update.available', { version: release.version })}</h2>
         <ReleaseNotes notes={release.notes} />
         {updating && <p class="update-progress"><vscode-progress-ring /> {t('update.applying')}</p>}
         <div class="update-actions">

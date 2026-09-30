@@ -5,7 +5,7 @@ import { t } from '../lib/i18n.js'
 import { useEscape } from '../lib/useEscape.js'
 import { TField } from './Fields.jsx'
 
-// Public link manager. Opened via the 'pixcode:share-open' event from the
+// Public link manager. Opened via the 'harpy:share-open' event from the
 // Remote view or the settings launcher row — the heavy configuration lives
 // here instead of being crammed into the settings list.
 export function ShareModal() {
@@ -25,8 +25,8 @@ export function ShareModal() {
 
   useEffect(() => {
     const show = () => { setOpen(true); load() }
-    window.addEventListener('pixcode:share-open', show)
-    return () => window.removeEventListener('pixcode:share-open', show)
+    window.addEventListener('harpy:share-open', show)
+    return () => window.removeEventListener('harpy:share-open', show)
   }, [])
 
   useEffect(() => () => window.clearInterval(pollRef.current), [])

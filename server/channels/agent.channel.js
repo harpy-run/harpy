@@ -2,11 +2,11 @@ import { listAgents } from '../agents/adapter.js'
 import { ownerKey, requireAccess, requireSelfOrAdmin } from '../auth.js'
 import { httpError } from '../util/http.js'
 import { cliEnvInfo, saveCliEnv } from '../cli-env.js'
-import { ensureMemory, listHandoffs, readHandoff } from '../handoffs.js'
+import { ensureMemory, listHandoffs, readHandoff, removeMemoryEverywhere } from '../handoffs.js'
 import { memoryPrefsFor, saveMemoryPrefs } from '../memory.js'
 import { installSkillRepo, listSkills, removeSkill, skillsDirFor } from '../skills.js'
 import { workspaceRoot } from '../workspace.js'
-import { closeRunner, detachSubscriber, getHistory, inputRunner, listChangedFiles, listPresence, listSessions, resizeRunner, sendToRunner, startRunner, stopRunner, unwatchRunner, watchRunner } from '../agents/runner.js'
+import { closeRunner, detachSubscriber, getHistory, inputRunner, listChangedFiles, listPresence, listSessions, resizeRunner, sendToRunner, startRunner, stopRunner, unwatchRunner, wakeRunner, watchRunner } from '../agents/runner.js'
 
 // Shared gate for the skills ops: `for` is admin-only, and user scope writes
 // into a home dir — with no private home that is the daemon's own
@@ -42,6 +42,7 @@ export const agentChannel = {
     resize: (ctx, { sessionId, cols, rows } = {}) => resizeRunner(ctx, sessionId, cols, rows),
     send: (ctx, { sessionId, text } = {}) => sendToRunner(ctx, sessionId, text),
     stop: (ctx, { sessionId } = {}) => stopRunner(ctx, sessionId),
+    wake: (ctx, { sessionId } = {}) => wakeRunner(ctx, sessionId),
     close: (ctx, { sessionId } = {}) => closeRunner(ctx, sessionId),
     sessions: (ctx, { workspace } = {}) => listSessions(ctx, workspace),
     history: (ctx, { sessionId } = {}) => getHistory(ctx, sessionId),
@@ -53,11 +54,19 @@ export const agentChannel = {
     // caller's project allowlist before any file under .harpy/ is touched.
     handoffs: (ctx, { workspace } = {}) => listHandoffs(workspaceRoot(workspace, ctx)),
     handoff: (ctx, { workspace, name } = {}) => ({ content: readHandoff(workspaceRoot(workspace, ctx), name) }),
-    memory: (ctx, { workspace } = {}) => ({ path: ensureMemory(workspaceRoot(workspace, ctx)) }),
-    // Whether a finished session may spend a short background run distilling
-    // durable facts into MEMORY.md — per-user, on by default, opt-out here.
+    memory: (ctx, { workspace } = {}) => ({ path: ensureMemory(workspaceRoot(workspace, ctx), ctx?.principal?.sub || 'owner') }),
+    // `memory` is the master switch for the whole .harpy/ integration;
+    // `digest` only gates the background CLI run that distills handoffs.
+    // Turning memory off also wipes .harpy/ + the AGENTS.md pointer block
+    // from every workspace the caller may reach — off means gone.
     memoryPrefs: (ctx) => { requireAccess(ctx); return memoryPrefsFor(ctx?.principal?.sub || 'owner') },
-    saveMemoryPrefs: (ctx, { digest } = {}) => { requireAccess(ctx); return saveMemoryPrefs(ctx?.principal?.sub || 'owner', { digest }) },
+    saveMemoryPrefs: (ctx, { memory, digest } = {}) => {
+      const access = requireAccess(ctx)
+      const sub = ctx?.principal?.sub || 'owner'
+      const prefs = saveMemoryPrefs(sub, { memory, digest })
+      if (memory === false) removeMemoryEverywhere({ allowlist: access.projects || null })
+      return prefs
+    },
     // Broadcast the same prompt to several running sessions — each target is
     // validated by sendToRunner's own write check, so a member can never
     // reach a session they could not type into directly.

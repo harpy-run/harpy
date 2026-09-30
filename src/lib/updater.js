@@ -4,8 +4,8 @@
 // an update, which also keeps the checker safe when a network is intercepted.
 
 export const CURRENT_VERSION = "2.6.3"
-export const RELEASE_URL = 'https://github.com/alicomert/pixcode/releases/latest'
-const RELEASE_API_URL = 'https://api.github.com/repos/alicomert/pixcode/releases/latest'
+export const RELEASE_URL = 'https://github.com/harpy-run/harpy/releases/latest'
+const RELEASE_API_URL = 'https://api.github.com/repos/harpy-run/harpy/releases/latest'
 
 function versionParts(value) {
   const match = String(value || '').trim().replace(/^v/i, '').match(/^(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:-([0-9A-Za-z.-]+))?/)
@@ -60,14 +60,14 @@ function releaseResult(release) {
     releaseUrl,
     assetUrl: asset?.url || '',
     assetName: asset?.name || '',
-    name: typeof release?.name === 'string' ? release.name : ('Pixcode ' + tag),
+    name: typeof release?.name === 'string' ? release.name : ('Harpy ' + tag),
     notes: typeof release?.body === 'string' ? release.body.trim() : '',
     publishedAt: release?.published_at || ''
   }
 }
 
 /**
- * Check the public GitHub release feed. This never needs a Pixcode account or
+ * Check the public GitHub release feed. This never needs a Harpy account or
  * token and rejects malformed responses so a proxy cannot make the UI offer a
  * bogus installer.
  */

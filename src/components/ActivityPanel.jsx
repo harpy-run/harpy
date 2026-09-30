@@ -23,7 +23,9 @@ function entryText(entry) {
     case 'pty': return entry.action === 'exit' ? t('activity.ptyExit', { code: entry.exitCode ?? '?' }) : t('activity.ptyOpen')
     case 'agent':
       if (entry.action === 'handoff') return t('activity.agentHandoff', { agent: entry.agent || '?' })
-      if (entry.action === 'memoryDigest') return t('activity.memoryDigest', { agent: entry.agent || '?' })
+      if (entry.action === 'memoryDigest') return entry.ok === false
+        ? t('activity.memoryDigestFailed', { agent: entry.agent || '?' })
+        : t('activity.memoryDigest', { agent: entry.agent || '?' })
       return entry.action === 'exit'
         ? t('activity.agentExit', { agent: entry.agent || '?', index: entry.index || '' })
         : t('activity.agentStart', { agent: entry.agent || '?', index: entry.index || '' })
@@ -60,14 +62,14 @@ export function ActivityPanel() {
     const unsubscribe = ws.on('activity', 'event', onEvent)
     const reopen = () => subscribe()
     const workspaceChange = () => { setEntries([]); subscribe() }
-    window.addEventListener('pixcode:ws-open', reopen)
-    window.addEventListener('pixcode:workspace-change', workspaceChange)
+    window.addEventListener('harpy:ws-open', reopen)
+    window.addEventListener('harpy:workspace-change', workspaceChange)
     subscribe()
     return () => {
       disposed = true
       unsubscribe()
-      window.removeEventListener('pixcode:ws-open', reopen)
-      window.removeEventListener('pixcode:workspace-change', workspaceChange)
+      window.removeEventListener('harpy:ws-open', reopen)
+      window.removeEventListener('harpy:workspace-change', workspaceChange)
       ws.request('activity', 'unwatch', { workspace: workspace.value?.path || '' }).catch(() => {})
     }
   }, [])
@@ -85,7 +87,7 @@ export function ActivityPanel() {
             <span class="activity-text">{entryText(entry)}</span>
             {Array.isArray(entry.files) && entry.files.length > 0 && (
               <span class="activity-files">
-                {entry.files.map((file) => <button key={file} type="button" class="activity-file" title={file} onClick={() => window.dispatchEvent(new CustomEvent('pixcode:open-file', { detail: file }))}>{file.split('/').pop()}</button>)}
+                {entry.files.map((file) => <button key={file} type="button" class="activity-file" title={file} onClick={() => window.dispatchEvent(new CustomEvent('harpy:open-file', { detail: file }))}>{file.split('/').pop()}</button>)}
                 {entry.count > entry.files.length && <span class="muted">+{entry.count - entry.files.length}</span>}
               </span>
             )}

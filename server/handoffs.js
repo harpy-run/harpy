@@ -1,25 +1,71 @@
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
+import { config } from './config.js'
+import { memoryEnabledFor } from './memory.js'
+import { listKnownWorkspaces, projectIdForPath } from './workspace.js'
 
 // Persistent memory, split the way the agent ecosystem converged on:
-// .pixcode/MEMORY.md holds curated facts (conventions, decisions, gotchas)
-// written by humans AND agents — never transcripts. .pixcode/handoffs/
+// .harpy/MEMORY.md holds curated facts (conventions, decisions, gotchas)
+// written by humans AND agents — never transcripts. .harpy/handoffs/
 // holds one snapshot per stopped session plus an auto-generated INDEX.md.
 // Agents learn the files exist through two channels: the MEMORY_PROMPT_HINT
 // prepended to every launch prompt, and a root AGENTS.md pointer that most
 // agent CLIs auto-load when a session starts with no prompt at all.
+// The whole integration is per-user opt-out: when memory is disabled Harpy
+// creates nothing, injects nothing, and removeMemoryEverywhere wipes what
+// earlier sessions left behind.
 const MAX_HANDOFFS = 30
 const TAIL_LINES = 40
 const TAIL_BYTES = 24 * 1024
 const TAIL_LINE_CHARS = 240
 const LIST_LIMIT = 20
 const NAME_PATTERN = /^[\w.-]+\.md$/
-const SESSIONS_START = '<!-- pixcode:sessions -->'
-const SESSIONS_END = '<!-- /pixcode:sessions -->'
+const SESSIONS_START = '<!-- harpy:sessions -->'
+const SESSIONS_END = '<!-- /harpy:sessions -->'
 const INDEX_MAX = 12
+const AGENTS_BLOCK_START = '<!-- harpy:memory -->'
+const AGENTS_BLOCK_END = '<!-- /harpy:memory -->'
 
-export const MEMORY_PROMPT_HINT = '[pixcode] Shared project memory lives at .pixcode/MEMORY.md — read it before working and update it when you learn durable conventions, decisions, or gotchas (never chat logs or task progress). Recent session snapshots: .pixcode/handoffs/INDEX.md.'
+const PROMPT_CONTEXT_MAX_CHARS = 8_000
+
+function promptFile(file) {
+  try {
+    const content = fs.readFileSync(file, 'utf8').trim()
+    if (!content) return '(empty)'
+    return content.length > PROMPT_CONTEXT_MAX_CHARS
+      ? `${content.slice(0, PROMPT_CONTEXT_MAX_CHARS)}\n[Harpy: remaining content omitted]`
+      : content
+  } catch {
+    return '(unavailable to Harpy)'
+  }
+}
+
+// Supply absolute paths because an agent may start in a workspace subfolder.
+// Include the MEMORY.md contents too: some CLI sandboxes refuse hidden
+// runtime files even though Harpy can read them, and that must not block the
+// task. INDEX.md is only pointed at — session history is consulted on
+// demand, so it should not ride along in every launch prompt.
+export function memoryPromptHint(workspace, owner) {
+  if (!memoryEnabledFor(owner)) return ''
+  const root = path.resolve(String(workspace || ''))
+  const memory = path.join(root, '.harpy', 'MEMORY.md')
+  const index = path.join(root, '.harpy', 'handoffs', 'INDEX.md')
+  return [
+    '[harpy] Shared project memory for this workspace:',
+    `Workspace root: ${root}`,
+    `Persistent memory: ${memory}`,
+    `Session snapshots: ${index} (read when continuing earlier work)`,
+    'Use the file contents below if your CLI cannot open these paths; continue the task and do not weaken or bypass its sandbox. If writing MEMORY.md is denied, report a proposed durable one-line update instead.',
+    'Update MEMORY.md only with durable conventions, decisions, or gotchas; never store chat logs or task progress.',
+    'Harpy preserves an existing root AGENTS.md and does not require replacing it.',
+    '',
+    'Current MEMORY.md contents:',
+    '```markdown',
+    promptFile(memory),
+    '```'
+  ].join('\n')
+}
 
 const MEMORY_SEED = `# Project memory
 
@@ -32,7 +78,7 @@ durable — a coding convention, a decision and the reason behind it, a
 gotcha that cost time, an environment quirk — record it under the
 matching heading below, one line per entry. Do NOT store session logs,
 chat transcripts, or task progress here; ephemeral state belongs in
-.pixcode/handoffs/ session snapshots.
+.harpy/handoffs/ session snapshots.
 -->
 
 ## Conventions
@@ -48,10 +94,10 @@ chat transcripts, or task progress here; ephemeral state belongs in
 // grok) auto-load from the workspace root on session start.
 const AGENTS_POINTER = `# AGENTS.md
 
-This workspace runs on Pixcode. Before starting work, read
-\`.pixcode/MEMORY.md\` — the project's persistent memory — and update it
+This workspace runs on Harpy. Before starting work, read
+\`.harpy/MEMORY.md\` — the project's persistent memory — and update it
 when you learn durable conventions, decisions, or gotchas (never chat
-logs). Recent session snapshots live under \`.pixcode/handoffs/\`
+logs). Recent session snapshots live under \`.harpy/handoffs/\`
 (start with \`INDEX.md\`).
 `
 
@@ -82,7 +128,7 @@ function cleanTailLine(raw) {
 }
 
 function dirFor(workspace) {
-  return path.join(workspace, '.pixcode', 'handoffs')
+  return path.join(workspace, '.harpy', 'handoffs')
 }
 
 function stamp(ts) {
@@ -101,7 +147,7 @@ function prune(dir) {
   }
 }
 
-// .pixcode/ is runtime data — ignore it inside the dir itself so `git status`
+// .harpy/ is runtime data — ignore it inside the dir itself so `git status`
 // in the project stays clean without touching tracked files or .git/info.
 function hideFromGit(dir) {
   try {
@@ -110,9 +156,10 @@ function hideFromGit(dir) {
   } catch { void 0 }
 }
 
-export function ensureMemory(workspace) {
+export function ensureMemory(workspace, owner) {
+  if (!memoryEnabledFor(owner)) return null
   try {
-    const dir = path.join(workspace, '.pixcode')
+    const dir = path.join(workspace, '.harpy')
     fs.mkdirSync(dir, { recursive: true, mode: 0o755 })
     hideFromGit(dir)
     const file = path.join(dir, 'MEMORY.md')
@@ -122,7 +169,7 @@ export function ensureMemory(workspace) {
       migrateMemory(file)
     }
     ensureAgentsPointer(workspace)
-    return '.pixcode/MEMORY.md'
+    return '.harpy/MEMORY.md'
   } catch { return null }
 }
 
@@ -148,15 +195,26 @@ function migrateMemory(file) {
   } catch { void 0 }
 }
 
+const AGENTS_BLOCK = `${AGENTS_BLOCK_START}
+This workspace uses Harpy: before starting work, read \`.harpy/MEMORY.md\` — the project's persistent memory — and update it with durable conventions, decisions, or gotchas (never chat logs or task progress). Recent session snapshots live under \`.harpy/handoffs/\` (start with \`INDEX.md\`).
+${AGENTS_BLOCK_END}`
+
 // A root AGENTS.md is the only channel that reaches interactive sessions
-// launched with no prompt — the CLIs load it themselves. Only created when
-// absent (a user's own AGENTS.md is never overwritten) and hidden via
-// .git/info/exclude, which ignores untracked files without touching .gitignore.
-// A tracked-but-deleted AGENTS.md is a deliberate removal — leave it gone.
+// launched with no prompt — the CLIs load it themselves. When absent the
+// minimal pointer is created (a tracked-but-deleted AGENTS.md is a
+// deliberate removal — leave it gone). When a project already has its own
+// AGENTS.md — as CLIs like codex generate — a marked `harpy:memory` block
+// is appended instead: same discovery, zero takeover, and the marker makes
+// it idempotent and strippable when memory is disabled.
 function ensureAgentsPointer(workspace) {
   try {
     const file = path.join(workspace, 'AGENTS.md')
-    if (fs.existsSync(file)) return
+    if (fs.existsSync(file)) {
+      const content = fs.readFileSync(file, 'utf8')
+      if (content.includes(AGENTS_BLOCK_START) || content.trim() === AGENTS_POINTER.trim()) return
+      fs.appendFileSync(file, `\n\n${AGENTS_BLOCK}\n`, { mode: 0o644 })
+      return
+    }
     try {
       execFileSync('git', ['-C', workspace, 'ls-files', '--error-unmatch', 'AGENTS.md'], { stdio: 'pipe' })
       return
@@ -195,13 +253,13 @@ function writeIndex(workspace, session, fileCount, handoffName) {
 }
 
 export function writeHandoff(session, { files = [], branch = '', tail = '' } = {}) {
-  if (!session?.workspace) return null
+  if (!session?.workspace || !memoryEnabledFor(session.owner)) return null
   try {
     // The store dir itself must never appear in the changed-files list.
-    const changed = files.filter((file) => !/^\.pixcode([/\\]|$)/.test(file.path))
+    const changed = files.filter((file) => !/^\.harpy([/\\]|$)/.test(file.path))
     const dir = dirFor(session.workspace)
     fs.mkdirSync(dir, { recursive: true, mode: 0o755 })
-    const memory = ensureMemory(session.workspace)
+    const memory = ensureMemory(session.workspace, session.owner)
     const name = `${session.sessionId}-${session.state?.agent || 'agent'}.md`
     const lines = [
       `# Session handoff — ${session.state?.agent || 'agent'} #${session.index || 1}`,
@@ -223,7 +281,7 @@ export function writeHandoff(session, { files = [], branch = '', tail = '' } = {
       '```',
       '',
       '---',
-      memory ? `Continue this work: read \`${memory}\` for project memory and \`.pixcode/handoffs/INDEX.md\` for earlier sessions, then pick up where this session left off.` : 'Continue this work where this session left off.',
+      memory ? `Continue this work: read \`${memory}\` for project memory and \`.harpy/handoffs/INDEX.md\` for earlier sessions, then pick up where this session left off.` : 'Continue this work where this session left off.',
       ''
     ].filter((line) => line !== null)
     fs.writeFileSync(path.join(dir, name), lines.join('\n'), { mode: 0o644 })
@@ -282,4 +340,72 @@ export function listHandoffs(workspace) {
 export function readHandoff(workspace, name) {
   if (!NAME_PATTERN.test(String(name || ''))) return null
   try { return fs.readFileSync(path.join(dirFor(workspace), name), 'utf8') } catch { return null }
+}
+
+// Opt-out cleanup: delete .harpy/ entirely and undo the AGENTS.md
+// integration. A file Harpy created wholesale (exact pointer content) is
+// removed along with its .git/info/exclude hiding line; a pre-existing
+// AGENTS.md only loses the marked harpy:memory block — everything the human
+// or another CLI wrote is preserved byte-for-byte.
+export function removeMemory(workspace) {
+  try {
+    fs.rmSync(path.join(workspace, '.harpy'), { recursive: true, force: true })
+    const file = path.join(workspace, 'AGENTS.md')
+    let deleted = false
+    if (fs.existsSync(file)) {
+      const content = fs.readFileSync(file, 'utf8')
+      if (content.trim() === AGENTS_POINTER.trim()) {
+        fs.rmSync(file, { force: true })
+        deleted = true
+      } else if (content.includes(AGENTS_BLOCK_START)) {
+        const cleaned = content
+          .replace(new RegExp(`\\n*${escapeRegExp(AGENTS_BLOCK_START)}[\\s\\S]*?${escapeRegExp(AGENTS_BLOCK_END)}\\n*`, 'g'), '')
+          .trimEnd() + '\n'
+        if (cleaned.trim()) fs.writeFileSync(file, cleaned, { mode: 0o644 })
+        else { fs.rmSync(file, { force: true }); deleted = true }
+      }
+    }
+    if (deleted) {
+      const exclude = path.join(workspace, '.git', 'info', 'exclude')
+      if (fs.existsSync(exclude)) {
+        const lines = fs.readFileSync(exclude, 'utf8').split('\n').filter((line) => line.trim() !== 'AGENTS.md')
+        fs.writeFileSync(exclude, lines.join('\n'), { mode: 0o644 })
+      }
+    }
+    return true
+  } catch { return false }
+}
+
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+// Enumerate every workspace the daemon knows — runtime-registered roots,
+// workspace.json externals/actives, and managed projects — and wipe memory
+// from each. `allowlist` (a Set of project ids) restricts members to
+// workspaces they could reach anyway; admins/owners pass null.
+export function removeMemoryEverywhere({ allowlist } = {}) {
+  const roots = new Set(listKnownWorkspaces())
+  try {
+    const state = JSON.parse(fs.readFileSync(path.join(config.dataDir, 'workspace.json'), 'utf8'))
+    const put = (value) => {
+      const id = String(value || '')
+      if (id.startsWith('external:')) roots.add(path.resolve(id.slice('external:'.length)))
+      else if (id) roots.add(path.join(config.projectsDir, id))
+    }
+    for (const item of state.externals || []) if (item?.path) roots.add(path.resolve(item.path))
+    for (const value of Object.values(state.actives || {})) put(value)
+    put(state.active)
+  } catch { void 0 }
+  try {
+    for (const entry of fs.readdirSync(config.projectsDir, { withFileTypes: true })) {
+      if (entry.isDirectory()) roots.add(path.join(config.projectsDir, entry.name))
+    }
+  } catch { void 0 }
+  let removed = 0
+  for (const root of roots) {
+    if (allowlist && !allowlist.has(projectIdForPath(root))) continue
+    if (removeMemory(root)) removed += 1
+  }
+  return { removed, workspaces: roots.size }
 }

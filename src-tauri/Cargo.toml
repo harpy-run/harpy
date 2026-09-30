@@ -1,12 +1,12 @@
 [package]
-name = "pixcode"
+name = "harpy"
 version = "2.6.3"
-description = "Pixcode desktop shell"
-authors = ["Ali Comert and Pixcode Contributors"]
+description = "Harpy desktop shell"
+authors = ["Ali Comert and Harpy Contributors"]
 edition = "2021"
 
 [lib]
-name = "pixcode_lib"
+name = "harpy_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

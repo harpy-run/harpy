@@ -48,7 +48,7 @@ pub fn run() {
         .plugin(
             tauri_plugin_autostart::Builder::new()
                 .args(["--hidden"])
-                .app_name("Pixcode")
+                .app_name("Harpy")
                 .build(),
         )
         .setup(|app| {
@@ -65,15 +65,15 @@ pub fn run() {
             } else if let Some(window) = app.get_webview_window("main") {
                 // Some Windows shell shortcuts restore the last hidden state.
                 // Explicitly show normal launches so double-clicking the EXE
-                // can never leave Pixcode running only in the tray.
+                // can never leave Harpy running only in the tray.
                 let _ = window.show();
                 let _ = window.set_focus();
             }
 
-            // Match the legacy desktop behaviour: Pixcode is available from
+            // Match the legacy desktop behaviour: Harpy is available from
             // the tray after the first launch and starts hidden at login.
             if let Err(error) = app.autolaunch().enable() {
-                eprintln!("pixcode autostart setup failed: {error}");
+                eprintln!("harpy autostart setup failed: {error}");
             }
             create_tray(app.handle())?;
             // The packaged desktop build can provide a bundled server entry.
@@ -92,9 +92,9 @@ pub fn run() {
                 let _ = window.hide();
             }
         })
-        .invoke_handler(tauri::generate_handler![pixcode_server_log])
+        .invoke_handler(tauri::generate_handler![harpy_server_log])
         .build(tauri::generate_context!())
-        .expect("error while building Pixcode")
+        .expect("error while building Harpy")
         .run(|_app, event| {
             // Keep the event loop alive while all windows are hidden. A tray
             // click can then restore the workbench at any time.
@@ -118,7 +118,7 @@ fn server_log_path<R: tauri::Runtime>(app: &AppHandle<R>) -> PathBuf {
 /// Surface the bundled server's own log to the "server unavailable" screen —
 /// a dead companion is otherwise impossible to diagnose from the UI.
 #[tauri::command]
-fn pixcode_server_log(app: AppHandle<tauri::Wry>) -> String {
+fn harpy_server_log(app: AppHandle<tauri::Wry>) -> String {
     let content = fs::read_to_string(server_log_path(&app)).unwrap_or_default();
     content
         .lines()
@@ -193,25 +193,25 @@ fn start_background_server<R: tauri::Runtime>(app: &AppHandle<R>) -> tauri::Resu
     let app_data = app.path().app_data_dir()?;
     if let Err(error) = fs::create_dir_all(&app_data) {
         eprintln!(
-            "pixcode could not create app data directory {}: {error}",
+            "harpy could not create app data directory {}: {error}",
             app_data.display()
         );
     }
     let log_path = app_data.join("server.log");
-    log_line(&log_path, "starting bundled Pixcode server");
-    let projects_dir = env::var_os("PIXCODE_PROJECTS")
+    log_line(&log_path, "starting bundled Harpy server");
+    let projects_dir = env::var_os("HARPY_PROJECTS")
         .map(PathBuf::from)
         .unwrap_or_else(|| app_data.join("projects"));
     // Resource layout differs slightly between bundler versions when a
     // directory is mapped to a target. Accept both possible nesting levels
     // so an installer can always find the staged server.
     let roots = [
-        resource.join("pixcode-runtime"),
-        resource.join("pixcode-runtime").join("pixcode"),
+        resource.join("harpy-runtime"),
+        resource.join("harpy-runtime").join("harpy"),
         // Keep compatibility with installers produced before the resource
         // directory was renamed to avoid the Linux binary name collision.
-        resource.join("pixcode"),
-        resource.join("pixcode").join("pixcode"),
+        resource.join("harpy"),
+        resource.join("harpy").join("harpy"),
         resource.clone(),
     ];
     let Some((bundled_root, entry)) = roots.iter().find_map(|root| {
@@ -228,7 +228,7 @@ fn start_background_server<R: tauri::Runtime>(app: &AppHandle<R>) -> tauri::Resu
         return Ok(false);
     };
     let bundled_node = bundled_root.join(if cfg!(windows) { "node.exe" } else { "node" });
-    let node = env::var_os("PIXCODE_NODE")
+    let node = env::var_os("HARPY_NODE")
         .map(PathBuf::from)
         .or_else(|| bundled_node.is_file().then_some(bundled_node))
         .unwrap_or_else(|| PathBuf::from("node"));
@@ -248,15 +248,15 @@ fn start_background_server<R: tauri::Runtime>(app: &AppHandle<R>) -> tauri::Resu
         .arg(entry)
         .args(["start", "--port", "3001"])
         .current_dir(working_dir)
-        .env("PIXCODE_DAEMON_CHILD", "1")
-        // Allow the bundled server to move off 3001 when an older Pixcode
+        .env("HARPY_DAEMON_CHILD", "1")
+        // Allow the bundled server to move off 3001 when an older Harpy
         // daemon or another local service already owns the stable port.
-        .env("PIXCODE_DESKTOP", "1")
+        .env("HARPY_DESKTOP", "1")
         // The desktop companion is local-only. Avoid firewall prompts and keep
         // its auth/projects state in the writable application data directory.
-        .env("PIXCODE_HOST", "127.0.0.1")
-        .env("PIXCODE_HOME", app_data.join("data"))
-        .env("PIXCODE_PROJECTS", projects_dir)
+        .env("HARPY_HOST", "127.0.0.1")
+        .env("HARPY_HOME", app_data.join("data"))
+        .env("HARPY_PROJECTS", projects_dir)
         .stdin(std::process::Stdio::null())
         .stdout(
             stdout
@@ -291,7 +291,7 @@ fn start_background_server<R: tauri::Runtime>(app: &AppHandle<R>) -> tauri::Resu
                 &log_path,
                 &format!("background server unavailable: {error}"),
             );
-            eprintln!("pixcode background server unavailable: {error}");
+            eprintln!("harpy background server unavailable: {error}");
         }
     }
     Ok(true)
@@ -320,24 +320,24 @@ fn stop_background_server<R: tauri::Runtime>(app: &AppHandle<R>) {
 }
 
 fn create_tray<R: tauri::Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
-    let show = MenuItem::with_id(app, "show", "Show Pixcode", true, None::<&str>)?;
+    let show = MenuItem::with_id(app, "show", "Show Harpy", true, None::<&str>)?;
     let autostart = CheckMenuItem::with_id(
         app,
         "autostart",
-        "Start Pixcode at login",
+        "Start Harpy at login",
         true,
         app.autolaunch().is_enabled().unwrap_or(true),
         None::<&str>,
     )?;
     let separator = PredefinedMenuItem::separator(app)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit Pixcode", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit Harpy", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &autostart, &separator, &quit])?;
 
-    let mut tray = TrayIconBuilder::with_id("pixcode-tray");
+    let mut tray = TrayIconBuilder::with_id("harpy-tray");
     if let Some(icon) = app.default_window_icon().cloned() {
         tray = tray.icon(icon);
     }
-    tray.tooltip("Pixcode — background server")
+    tray.tooltip("Harpy — background server")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(move |app, event| match event.id.as_ref() {
@@ -350,7 +350,7 @@ fn create_tray<R: tauri::Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
                     app.autolaunch().enable()
                 };
                 if let Err(error) = result {
-                    eprintln!("pixcode autostart toggle failed: {error}");
+                    eprintln!("harpy autostart toggle failed: {error}");
                 } else {
                     let _ = autostart.set_checked(!enabled);
                 }

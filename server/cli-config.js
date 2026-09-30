@@ -10,7 +10,9 @@ const DEFAULTS = {
   port: 3001,
   workspace: null,
   autostart: true,
-  webhook: null
+  webhook: null,
+  lang: null,      // CLI language picked in the first-run wizard (cli-i18n LOCALES)
+  background: null // whether the operator wants the daemon kept alive in the background
 }
 
 export function cliConfigExists() {

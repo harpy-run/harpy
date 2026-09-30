@@ -4,18 +4,18 @@ import { config } from './config.js'
 import { httpError } from './util/http.js'
 import { saveGitAccount } from './git-account.js'
 
-// GitHub OAuth device flow — the "sign in with GitHub" path. Pixcode asks
+// GitHub OAuth device flow — the "sign in with GitHub" path. Harpy asks
 // GitHub for a short user code, the user approves it in their browser, and
 // the resulting token lands in the per-account store. No PAT handling.
 //
 // The device flow needs a public OAuth App client_id (like the `gh` CLI
-// embeds its own). Resolution order: PIXCODE_GITHUB_CLIENT_ID env, then the
+// embeds its own). Resolution order: HARPY_GITHUB_CLIENT_ID env, then the
 // admin-managed value in git-oauth.json (written 0600, readable shape only
 // exposes whether one is set).
 const OAUTH_FILE = path.join(config.dataDir, 'git-oauth.json')
 const SCOPES = 'repo workflow read:user user:email'
 
-const GITHUB_HEADERS = { accept: 'application/json', 'content-type': 'application/json', 'user-agent': 'pixcode' }
+const GITHUB_HEADERS = { accept: 'application/json', 'content-type': 'application/json', 'user-agent': 'harpy' }
 
 function readConfig() {
   try { return JSON.parse(fs.readFileSync(OAUTH_FILE, 'utf8')) } catch { return {} }
@@ -31,7 +31,7 @@ function writeConfig(record) {
 }
 
 export function githubClientId() {
-  const env = String(process.env.PIXCODE_GITHUB_CLIENT_ID || '').trim()
+  const env = String(process.env.HARPY_GITHUB_CLIENT_ID || '').trim()
   if (env) return env
   return String(readConfig().clientId || '').trim()
 }
@@ -47,7 +47,7 @@ export function setGithubClientId(value) {
 
 // --- Self-bootstrap: GitHub App manifest flow -------------------------------
 // Self-hosted OAuth needs a registered app. Instead of asking the admin to
-// fill GitHub's developer form, Pixcode posts a manifest to
+// fill GitHub's developer form, Harpy posts a manifest to
 // github.com/settings/apps/new — the admin only presses the green "Create"
 // button, GitHub redirects back with a code, and the conversion response
 // carries the client_id. One click of real work, like a hosted app's
@@ -68,10 +68,13 @@ export function appBootstrap(origin) {
   return {
     state: nonce,
     manifest: {
-      name: `Pixcode ${nonce.slice(0, 4)}`,
+      name: `Harpy ${nonce.slice(0, 4)}`,
       url: origin,
       description: 'Self-hosted coding workbench — Git sign-in',
-      public: false,
+      // A private app can only be authorized by the GitHub account that
+      // created it — every other user hits a 404 on the authorize page. The
+      // client_secret stays server-side either way, so public is safe here.
+      public: true,
       redirect_url: callback,
       callback_urls: [`${origin}/api/git/oauth/callback`],
       request_oauth_on_install: false,
@@ -129,7 +132,7 @@ export async function webComplete(code, state) {
 // Shared by every token source (web flow, device flow, manual PAT): verify
 // the token, fetch the profile + primary email, store both.
 export async function adoptGithubUser(sub, token) {
-  const headers = { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'user-agent': 'pixcode' }
+  const headers = { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'user-agent': 'harpy' }
   let profile
   try {
     const res = await fetch('https://api.github.com/user', { headers, signal: AbortSignal.timeout(8_000) })
@@ -218,7 +221,7 @@ export function oauthRoutes(router) {
     try {
       await convertBootstrap(req.query.get('code'), req.query.get('state'))
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-      res.end(CALLBACK_PAGE('GitHub connected', 'The Pixcode GitHub App was created. You can close this tab and connect from the Git panel.'))
+      res.end(CALLBACK_PAGE('GitHub connected', 'The Harpy GitHub App was created. You can close this tab and connect from the Git panel.'))
     } catch (error) {
       res.writeHead(error.status || 500, { 'content-type': 'text/html; charset=utf-8' })
       res.end(CALLBACK_PAGE('Setup failed', error.message || 'unknown error'))

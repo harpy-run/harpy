@@ -4,7 +4,7 @@ import { ws } from '../lib/ws.js'
 import { t } from '../lib/i18n.js'
 import { useEscape } from '../lib/useEscape.js'
 import { TField } from './Fields.jsx'
-import { isAdmin, openFile, workspace } from '../state/app.js'
+import { isAdmin, openFile, pendingFileAction, workspace } from '../state/app.js'
 
 function joinPath(parent, name) {
   return parent === '.' ? name : parent + '/' + name
@@ -48,7 +48,7 @@ export function getFileIcon(name, type, expanded) {
   return fileIcons[extension] || [File, '#858585']
 }
 
-function Node({ path, name, type, depth = 0, refreshToken, softToken, onError, onChanged }) {
+function Node({ path, name, type, depth = 0, refreshToken, softToken, onError, onChanged, wsPath, onOpen }) {
   const [expanded, setExpanded] = useState(false)
   const [children, setChildren] = useState(null)
 
@@ -66,7 +66,7 @@ function Node({ path, name, type, depth = 0, refreshToken, softToken, onError, o
   async function loadChildren(force = false) {
     if (!force && children) return
     try {
-      setChildren(await ws.request('fs', 'list', { path, workspace: workspace.value?.path || '' }))
+      setChildren(await ws.request('fs', 'list', { path, workspace: wsPath() }))
       onError('')
     } catch (requestError) {
       onError(requestError.message)
@@ -74,7 +74,7 @@ function Node({ path, name, type, depth = 0, refreshToken, softToken, onError, o
   }
 
   async function activate() {
-    if (type !== 'dir') { openFile(path); return }
+    if (type !== 'dir') { (onOpen || openFile)(path); return }
     const next = !expanded
     setExpanded(next)
     if (next) await loadChildren(true)
@@ -94,13 +94,18 @@ function Node({ path, name, type, depth = 0, refreshToken, softToken, onError, o
           <vscode-toolbar-button icon="trash" title={t('tree.delete')} aria-label={t('tree.delete')} onClick={() => onChanged({ type: 'delete', path, name })}></vscode-toolbar-button>
         </span>
       </div>
-      {expanded && children?.map((child) => <Node key={joinPath(path, child.name)} path={joinPath(path, child.name)} {...child} depth={depth + 1} refreshToken={refreshToken} softToken={softToken} onError={onError} onChanged={onChanged} />)}
+      {expanded && children?.map((child) => <Node key={joinPath(path, child.name)} path={joinPath(path, child.name)} {...child} depth={depth + 1} refreshToken={refreshToken} softToken={softToken} onError={onError} onChanged={onChanged} wsPath={wsPath} onOpen={onOpen} />)}
       {expanded && children?.length === 0 && <div class="tree-item muted" style={{ paddingLeft: String(18 + depth * 12) + 'px' }}>{t('tree.empty')}</div>}
     </div>
   )
 }
 
-export function FileTree() {
+// `workspacePath` pins the tree to a workspace pane (split/agent layouts);
+// `onOpenFile` overrides where file opens go. Without them the tree follows
+// the global workspace and opens files in the classic editor.
+export function FileTree({ workspacePath, onOpenFile }) {
+  const fixed = typeof workspacePath === 'string' && workspacePath.length > 0
+  const wsPath = () => (fixed ? workspacePath : workspace.value?.path) || ''
   const [root, setRoot] = useState(null)
   const [error, setError] = useState('')
   const [refreshToken, setRefreshToken] = useState(0)
@@ -112,15 +117,15 @@ export function FileTree() {
 
   async function refresh() {
     const sequence = ++refreshSequence.current
-    const requestedWorkspace = workspace.value?.path || ''
+    const requestedWorkspace = wsPath()
     try {
       setError('')
-      const nextRoot = await ws.request('fs', 'list', { path: '.', workspace: workspace.value?.path || '' })
-      if (sequence !== refreshSequence.current || requestedWorkspace !== (workspace.value?.path || '')) return
+      const nextRoot = await ws.request('fs', 'list', { path: '.', workspace: requestedWorkspace })
+      if (sequence !== refreshSequence.current || requestedWorkspace !== wsPath()) return
       setRoot(nextRoot)
       setRefreshToken((value) => value + 1)
     } catch (requestError) {
-      if (sequence === refreshSequence.current && requestedWorkspace === (workspace.value?.path || '')) setError(requestError.message)
+      if (sequence === refreshSequence.current && requestedWorkspace === wsPath()) setError(requestError.message)
     }
   }
 
@@ -129,10 +134,10 @@ export function FileTree() {
   // immediately like terminal output does.
   async function softRefresh() {
     const sequence = ++refreshSequence.current
-    const requestedWorkspace = workspace.value?.path || ''
+    const requestedWorkspace = wsPath()
     try {
       const nextRoot = await ws.request('fs', 'list', { path: '.', workspace: requestedWorkspace })
-      if (sequence !== refreshSequence.current || requestedWorkspace !== (workspace.value?.path || '')) return
+      if (sequence !== refreshSequence.current || requestedWorkspace !== wsPath()) return
       setRoot(nextRoot)
       setSoftToken((value) => value + 1)
     } catch { /* keep the stale tree — the next event retries */ }
@@ -141,42 +146,49 @@ export function FileTree() {
   useEffect(() => {
     refresh()
     const newFile = () => openCreate('file')
-    const workspaceChange = () => {
+    const workspaceChange = (event) => {
+      // A pinned pane tree only reloads if its own workspace was rebound.
+      if (fixed && event.detail?.path && event.detail.path !== workspacePath) return
       setRoot(null)
       setError('')
       refresh()
     }
     const changed = (data) => {
-      if (String(data?.workspace || '') !== (workspace.value?.path || '')) return
+      if (String(data?.workspace || '') !== wsPath()) return
       window.clearTimeout(softTimer.current)
       softTimer.current = window.setTimeout(softRefresh, 200)
     }
+    const pending = fixed ? null : pendingFileAction.value
+    if (pending) {
+      pendingFileAction.value = null
+      openCreate(pending.type)
+    }
     const unsubscribe = ws.on('fs', 'changed', changed)
-    window.addEventListener('pixcode:new-file', newFile)
-    window.addEventListener('pixcode:workspace-change', workspaceChange)
+    if (!fixed) window.addEventListener('harpy:new-file', newFile)
+    window.addEventListener('harpy:workspace-change', workspaceChange)
     return () => {
       unsubscribe()
       window.clearTimeout(softTimer.current)
-      window.removeEventListener('pixcode:new-file', newFile)
-      window.removeEventListener('pixcode:workspace-change', workspaceChange)
+      if (!fixed) window.removeEventListener('harpy:new-file', newFile)
+      window.removeEventListener('harpy:workspace-change', workspaceChange)
     }
-  }, [])
+  }, [workspacePath])
 
   async function submitAction(event) {
     event.preventDefault()
     if (!dialog) return
     try {
       if (dialog.type === 'delete') {
-        await ws.request('fs', 'delete', { path: dialog.path, workspace: workspace.value?.path || '' })
+        await ws.request('fs', 'delete', { path: dialog.path, workspace: wsPath() })
       } else if (dialog.type === 'rename') {
         const parent = dialog.path.includes('/') ? dialog.path.slice(0, dialog.path.lastIndexOf('/')) : '.'
-        await ws.request('fs', 'rename', { from: dialog.path, to: joinPath(parent, dialog.value.trim()), workspace: workspace.value?.path || '' })
+        await ws.request('fs', 'rename', { from: dialog.path, to: joinPath(parent, dialog.value.trim()), workspace: wsPath() })
       } else if (dialog.type === 'file') {
-        await ws.request('fs', 'write', { path: dialog.value.trim(), content: '', workspace: workspace.value?.path || '' })
+        await ws.request('fs', 'write', { path: dialog.value.trim(), content: '', workspace: wsPath() })
       } else {
-        await ws.request('fs', 'mkdir', { path: dialog.value.trim(), workspace: workspace.value?.path || '' })
+        await ws.request('fs', 'mkdir', { path: dialog.value.trim(), workspace: wsPath() })
       }
-      window.dispatchEvent(new Event('pixcode:workspace-data-change'))
+      window.dispatchEvent(new Event('harpy:workspace-data-change'))
       setDialog(null)
       await refresh()
     } catch (requestError) {
@@ -206,13 +218,13 @@ export function FileTree() {
         <p class="muted">{t('tree.emptyHint')}</p>
         <div class="tree-empty-actions">
           {isAdmin.value ? <>
-            <button type="button" onClick={() => window.dispatchEvent(new Event('pixcode:open-folder'))}><FolderOpen size={14} /> {t('project.openFolder')}</button>
-            <button type="button" onClick={() => window.dispatchEvent(new Event('pixcode:clone-repo'))}><GitFork size={14} /> {t('project.cloneRepo')}</button>
-            <button type="button" onClick={() => window.dispatchEvent(new Event('pixcode:new-project'))}><FolderPlus size={14} /> {t('project.new')}</button>
-          </> : <button type="button" onClick={() => window.dispatchEvent(new Event('pixcode:open-folder'))}><FolderOpen size={14} /> {t('project.openExisting')}</button>}
+            <button type="button" onClick={() => window.dispatchEvent(new Event('harpy:open-folder'))}><FolderOpen size={14} /> {t('project.openFolder')}</button>
+            <button type="button" onClick={() => window.dispatchEvent(new Event('harpy:clone-repo'))}><GitFork size={14} /> {t('project.cloneRepo')}</button>
+            <button type="button" onClick={() => window.dispatchEvent(new Event('harpy:new-project'))}><FolderPlus size={14} /> {t('project.new')}</button>
+          </> : <button type="button" onClick={() => window.dispatchEvent(new Event('harpy:open-folder'))}><FolderOpen size={14} /> {t('project.openExisting')}</button>}
         </div>
       </div>}
-      {!error && root?.length > 0 && <vscode-scrollable class="tree-scroller"><div class="tree">{root.map((entry) => <Node key={entry.name} path={entry.name} {...entry} refreshToken={refreshToken} softToken={softToken} onError={setError} onChanged={handleNodeAction} />)}</div></vscode-scrollable>}
+      {!error && root?.length > 0 && <vscode-scrollable class="tree-scroller"><div class="tree">{root.map((entry) => <Node key={entry.name} path={entry.name} {...entry} refreshToken={refreshToken} softToken={softToken} onError={setError} onChanged={handleNodeAction} wsPath={wsPath} onOpen={onOpenFile} />)}</div></vscode-scrollable>}
       {dialog && <div class="modal-backdrop" onClick={() => setDialog(null)}>
         <form class="file-action-modal" role="dialog" aria-modal="true" aria-labelledby="file-action-title" onSubmit={submitAction} onClick={(event) => event.stopPropagation()}>
           <h2 id="file-action-title">{t(dialog.type === 'delete' ? 'tree.delete' : dialog.type === 'rename' ? 'tree.rename' : dialog.type === 'file' ? 'tree.newFile' : 'tree.newFolder')}</h2>

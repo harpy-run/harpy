@@ -1,8 +1,8 @@
 import WebSocket from 'ws'
 
 const BASE = process.env.BASE || 'http://localhost:3001'
-const username = process.env.PIXCODE_SMOKE_USERNAME || 'admin'
-const password = process.env.PIXCODE_SMOKE_PASSWORD || 'secret123'
+const username = process.env.HARPY_SMOKE_USERNAME || 'admin'
+const password = process.env.HARPY_SMOKE_PASSWORD || 'secret123'
 let failed = false
 
 async function request(path, options) {
@@ -82,7 +82,7 @@ await check('websocket channels', async () => {
   }
   const files = await request('fs', 'list', { path: '.' })
   const agents = await request('agent', 'agents')
-  if (!Array.isArray(files) || agents.length !== 7) throw new Error('channel response invalid')
+  if (!Array.isArray(files) || agents.length !== 8) throw new Error('channel response invalid')
   const terminal = await request('pty', 'create', { cols: 80, rows: 24 })
   await request('pty', 'input', { id: terminal.id, data: 'exit\n' })
   socket.close()

@@ -23,7 +23,7 @@ export const languages = [
   { value: 'ru', label: 'Russian', nativeName: 'Русский' },
   { value: 'zh-CN', label: 'Simplified Chinese', nativeName: '简体中文' }
 ]
-const stored = localStorage.getItem('pixcode.locale')
+const stored = localStorage.getItem('harpy.locale')
 const browserLanguage = typeof navigator !== 'undefined' ? (navigator.languages || [navigator.language]).find((value) => languages.some((language) => language.value === value || value?.startsWith(`${language.value}-`))) : ''
 const detected = languages.find((language) => language.value === browserLanguage || browserLanguage?.startsWith(`${language.value}-`))?.value || 'en'
 export const locale = signal(stored && dictionaries[stored] ? stored : detected)
@@ -31,7 +31,7 @@ export const locale = signal(stored && dictionaries[stored] ? stored : detected)
 export function setLocale(language) {
   const next = dictionaries[language] ? language : 'en'
   locale.value = next
-  localStorage.setItem('pixcode.locale', next)
+  localStorage.setItem('harpy.locale', next)
   document.documentElement.lang = next
 }
 

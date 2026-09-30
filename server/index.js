@@ -25,6 +25,7 @@ import { shareResume, shareRoutes, shareSupervise } from './share.js'
 import { previewRoutes } from './preview.js'
 import { oauthRoutes } from './git-oauth.js'
 import { automationChannel } from './channels/automation.channel.js'
+import { rigChannel } from './channels/rig.channel.js'
 import { automationRoutes, onFsChanged, sessionEnded, setAutomationNotifier, startScheduler } from './automations.js'
 import { registerFsListener } from './channels/fs.channel.js'
 
@@ -101,6 +102,7 @@ export function createHttpServer() {
   hub.register('share', shareChannel)
   hub.register('system', systemChannel)
   hub.register('automation', automationChannel)
+  hub.register('rig', rigChannel)
   // Automation engine: fs watcher flushes, the cron tick, and the runner's
   // session-end hook feed trigger → gate → spawn. All idle work is local.
   registerFsListener(onFsChanged)

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
-import { Archive, BookOpen, ChevronDown, ChevronUp, Download, Eye, History, Maximize2, Radio, Search, Send, Terminal as TerminalIcon, X } from '../lib/icons.jsx'
+import { Archive, BookOpen, ChevronDown, ChevronUp, Download, Eye, History, Maximize2, Moon, Radio, Search, Send, Terminal as TerminalIcon, X } from '../lib/icons.jsx'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon } from '@xterm/addon-search'
@@ -7,8 +7,9 @@ import '@xterm/xterm/css/xterm.css'
 import { ws, isConnectionError } from '../lib/ws.js'
 import { t } from '../lib/i18n.js'
 import { useEscape } from '../lib/useEscape.js'
-import { activeAgent, agentSessions, isAdmin, panelOpen, principal, terminalFontSize, terminalScrollSpeed, theme, workspace } from '../state/app.js'
+import { activeAgent, agentFullscreen, agentRailOpen, agentSessions, isAdmin, mobileTab, panelOpen, principal, terminalFontSize, terminalScrollSpeed, theme, workspace } from '../state/app.js'
 import { terminalFont, terminalTheme } from '../lib/terminal-theme.js'
+import { attachFastRenderer } from '../lib/terminal-renderer.js'
 import { watchTerminalResize } from '../lib/terminal-resize.js'
 import { TInput } from './Fields.jsx'
 import { attachTerminalTouchScroll } from '../lib/terminal-touch.js'
@@ -16,7 +17,9 @@ import { attachTerminalKeys } from '../lib/terminal-keys.js'
 import { TerminalScrollButtons } from './TerminalScrollButtons.jsx'
 import { TerminalSearchBox } from './TerminalSearch.jsx'
 import { sanitizeReplay } from '../lib/terminal-replay.js'
+import { createTerminalOutputQueue } from '../lib/terminal-output.js'
 import { TerminalAccessory } from './Terminals.jsx'
+import { RigsPanel } from './RigsPanel.jsx'
 
 const agentIcons = {
   claude: '/icons/claude-ai-icon.svg',
@@ -25,7 +28,8 @@ const agentIcons = {
   gemini: '/icons/gemini-ai-icon.svg',
   qwen: '/icons/qwen-logo.svg',
   opencode: '/icons/opencode-logo-dark.svg',
-  grok: '/icons/grok-build-icon.png'
+  grok: '/icons/grok-build-icon.png',
+  openrig: '/icons/openrig.svg'
 }
 
 // A close action must survive a browser refresh, especially when the server
@@ -77,15 +81,21 @@ function AgentLogo({ agent, size = 18 }) {
   return <TerminalIcon size={size} aria-hidden="true" />
 }
 
-function AgentTerminalView({ session, onStatus, onReady, modifiersRef, foreign = false }) {
+function AgentTerminalView({ session, onStatus, onReady, modifiersRef, foreign = false, paneVisible }) {
   const host = useRef(null)
   const terminalRef = useRef(null)
   const fitRef = useRef(null)
   const searchRef = useRef(null)
   const [searchOpen, setSearchOpen] = useState(false)
+  const [terminalInstance, setTerminalInstance] = useState(null)
   // Members may watch an admin's terminal but never type into it; admins get
   // full control over any session they open.
   const canType = !foreign || isAdmin.value
+  // Pane-mounted terminals (agents grid / split panes) are visible whenever
+  // they exist — the pane area unmounts rather than hiding them.
+  const agentPaneVisible = () => paneVisible ?? (window.matchMedia?.('(max-width: 767px)').matches
+    ? mobileTab.value === 'agent'
+    : agentRailOpen.value)
 
   useEffect(() => {
     if (!host.current || !session) return undefined
@@ -97,6 +107,10 @@ function AgentTerminalView({ session, onStatus, onReady, modifiersRef, foreign =
     searchRef.current = search
     terminal.loadAddon(search)
     terminal.open(host.current)
+    attachFastRenderer(terminal)
+    terminalRef.current = terminal
+    setTerminalInstance(terminal)
+    const outputQueue = createTerminalOutputQueue(terminal)
     attachTerminalKeys(terminal)
     const stopTouchScroll = attachTerminalTouchScroll(host.current, terminal, () => terminalScrollSpeed.value)
     // The active agent tab should be immediately typeable after it is
@@ -104,53 +118,63 @@ function AgentTerminalView({ session, onStatus, onReady, modifiersRef, foreign =
     // auto-focus on coarse-pointer devices so opening the tab does not pop
     // the software keyboard before the user asks to type.
     if (!window.matchMedia?.('(pointer: coarse)').matches) terminal.focus()
-    terminalRef.current = terminal
     onReady?.({
       focus: () => terminal.focus(),
       blur: () => terminal.blur(),
-      input: (data) => terminal.input(data, true)
+      input: (data) => terminal.input(data, true),
+      selection: () => terminal.getSelection(),
+      clearSelection: () => terminal.clearSelection()
     })
     let disposed = false
+    let viewVisible = agentPaneVisible()
     let lastSeq = 0
     let hydrated = false
     let hydrating = false
     let hydrationGeneration = 0
     let rehydrateRequested = false
+    let restoreToLatest = true
     const pendingEvents = []
 
     async function hydrate() {
-      if (disposed) return
+      if (disposed || !viewVisible) return
       if (hydrating) { rehydrateRequested = true; return }
       hydrating = true
       const generation = hydrationGeneration
       try {
         const history = await ws.request('agent', 'history', { sessionId: session.sessionId })
         if (generation !== hydrationGeneration) return
-        for (const event of history) {
+        const replay = history
+          .filter((event) => !event.seq || event.seq > lastSeq)
+          .map((event) => ({ ...event, data: event.type === 'data' ? sanitizeReplay(event.data) : '' }))
+        const events = [...replay, ...pendingEvents.splice(0)].sort((left, right) => (left.seq || 0) - (right.seq || 0))
+        const output = []
+        for (const event of events) {
           if (event.seq && event.seq <= lastSeq) continue
-          if (event.type === 'data') terminal.write(sanitizeReplay(event.data))
+          if (event.type === 'data') output.push(event.data || '')
           lastSeq = Math.max(lastSeq, event.seq || 0)
           if (event.type === 'done') onStatus(session.sessionId, 'stopped')
         }
-        if (!hydrated) {
-          hydrated = true
-          for (const event of pendingEvents.splice(0).sort((left, right) => (left.seq || 0) - (right.seq || 0))) {
-            if (event.seq && event.seq <= lastSeq) continue
-            if (event.type === 'data') terminal.write(event.data || '')
-            lastSeq = Math.max(lastSeq, event.seq || 0)
-            if (event.type === 'done') onStatus(session.sessionId, 'stopped')
-          }
-        }
+        const shouldRestore = restoreToLatest
+        restoreToLatest = false
+        hydrated = true
+        outputQueue.write(output.join(''), () => {
+          if (shouldRestore) terminal.scrollToBottom()
+          stopResizeWatcher.refresh?.()
+        })
       } catch (error) {
         if (!disposed && generation === hydrationGeneration) {
-          terminal.write(`\r\n[history unavailable: ${error.message}]\r\n`)
+          const shouldRestore = restoreToLatest
+          restoreToLatest = false
+          outputQueue.write(`\r\n[history unavailable: ${error.message}]\r\n`, () => {
+            if (shouldRestore) terminal.scrollToBottom()
+          })
           // A temporary history failure must not trap subsequent live output
           // in the pending queue. The next reconnect will hydrate again and
           // sequence filtering will discard any duplicate chunks.
           hydrated = true
           for (const event of pendingEvents.splice(0).sort((left, right) => (left.seq || 0) - (right.seq || 0))) {
             if (event.seq && event.seq <= lastSeq) continue
-            if (event.type === 'data') terminal.write(event.data || '')
+            if (event.type === 'data') outputQueue.write(event.data || '')
             lastSeq = Math.max(lastSeq, event.seq || 0)
             if (event.type === 'done') onStatus(session.sessionId, 'stopped')
           }
@@ -171,25 +195,64 @@ function AgentTerminalView({ session, onStatus, onReady, modifiersRef, foreign =
     // Tap-to-focus only: a scroll drag preventDefaults its touchmoves, which
     // suppresses the click — pointerdown focus would pop the keyboard
     // mid-gesture and break scrolling.
-    const focusTerminal = () => terminal.focus()
+    let suppressNextTouchClick = false
+    let touchClickTimer = 0
+    const focusTerminal = (event) => {
+      if (event.detail === 0) { terminal.focus(); return }
+      if (suppressNextTouchClick) {
+        suppressNextTouchClick = false
+        event.preventDefault()
+        return
+      }
+      terminal.focus()
+    }
+    const consumeTouchGesture = () => {
+      suppressNextTouchClick = true
+      clearTimeout(touchClickTimer)
+      touchClickTimer = setTimeout(() => { suppressNextTouchClick = false }, 700)
+    }
     host.current.addEventListener('click', focusTerminal)
+    host.current.addEventListener('harpy:terminal-touch-consumed', consumeTouchGesture)
     const reconnect = () => {
       hydrationGeneration += 1
       hydrated = false
+      restoreToLatest = false
       pendingEvents.length = 0
       rehydrateRequested = hydrating
+      if (!viewVisible) return
       // WS subscriptions die with the connection — re-watch first so history
       // and live events stay readable for a foreign session.
       const resubscribe = foreign ? ws.request('agent', 'watch', { sessionId: session.sessionId }).catch(() => {}) : Promise.resolve()
       resubscribe.finally(() => hydrate())
     }
+    const visibilityChange = () => {
+      const visible = agentPaneVisible()
+      if (visible === viewVisible) return
+      viewVisible = visible
+      hydrationGeneration += 1
+      hydrated = false
+      pendingEvents.length = 0
+      rehydrateRequested = false
+      if (!visible) {
+        ws.request('agent', 'unwatch', { sessionId: session.sessionId }).catch(() => {})
+        return
+      }
+      const resubscribe = foreign ? ws.request('agent', 'watch', { sessionId: session.sessionId }).catch(() => {}) : Promise.resolve()
+      resubscribe.finally(() => hydrate())
+    }
     window.addEventListener('harpy:ws-open', reconnect)
+    window.addEventListener('harpy:panel-visibility', visibilityChange)
     const keyboardLayout = (event) => {
-      if (!event.detail?.open) return
+      if (event.detail?.open && !host.current?.contains(document.activeElement)) return
+      const buffer = terminal.buffer.active
+      const wasAtLiveEdge = buffer.type === 'alternate' || buffer.viewportY >= buffer.baseY
       requestAnimationFrame(() => {
         try {
+          const rect = host.current?.getBoundingClientRect()
+          if (!rect || rect.width < 4 || rect.height < 4) return
           fit.fit()
-          terminal.scrollToBottom()
+          if (event.detail?.open && wasAtLiveEdge) terminal.scrollToBottom()
+          stopResizeWatcher.refresh?.()
         } catch {
           // xterm may be between open/dispose while the pane is switching.
         }
@@ -211,6 +274,7 @@ function AgentTerminalView({ session, onStatus, onReady, modifiersRef, foreign =
       if (modifiersRef?.current && data.length === 1 && /[a-z]/i.test(data)) {
         nextData = String.fromCharCode(data.toUpperCase().charCodeAt(0) - 64)
         modifiersRef.current = false
+        modifiersRef.onChange?.(false)
       }
       ws.request('agent', 'input', { sessionId: session.sessionId, data: nextData }).catch((error) => {
         // Do not silently swallow a dead/reconnected PTY. Showing one concise
@@ -218,7 +282,7 @@ function AgentTerminalView({ session, onStatus, onReady, modifiersRef, foreign =
         // obvious instead of accepting keystrokes that disappear.
         if (disposed || inputErrorShown) return
         inputErrorShown = true
-        terminal.write(`\r\n[agent input unavailable: ${error.message}]\r\n`)
+        outputQueue.write(`\r\n[agent input unavailable: ${error.message}]\r\n`)
         if (/session (?:not )?running|session not found/i.test(error.message || '')) onStatus(session.sessionId, 'stopped')
       })
     })
@@ -229,29 +293,36 @@ function AgentTerminalView({ session, onStatus, onReady, modifiersRef, foreign =
         return
       }
       lastSeq = event.seq || lastSeq
-      if (event.type === 'data') terminal.write(event.data || '')
+      if (event.type === 'data') outputQueue.write(event.data || '')
       if (event.type === 'done') onStatus(session.sessionId, 'stopped')
     })
-    hydrate().finally(() => {
-      if (!disposed) stopResizeWatcher.refresh?.()
-    }).catch(() => {})
+    if (viewVisible) {
+      hydrate().finally(() => {
+        if (!disposed) stopResizeWatcher.refresh?.()
+      }).catch(() => {})
+    }
     return () => {
       disposed = true
       stopResizeWatcher()
       stopTouchScroll()
       host.current?.removeEventListener('click', focusTerminal)
+      host.current?.removeEventListener('harpy:terminal-touch-consumed', consumeTouchGesture)
+      clearTimeout(touchClickTimer)
       window.removeEventListener('harpy:ws-open', reconnect)
+      window.removeEventListener('harpy:panel-visibility', visibilityChange)
       window.removeEventListener('harpy:keyboard', keyboardLayout)
       window.removeEventListener('harpy:agent-search', toggleSearch)
       dataUnsubscribe()
       inputDisposable.dispose()
+      ws.request('agent', 'unwatch', { sessionId: session.sessionId }).catch(() => {})
+      outputQueue.dispose()
       terminal.dispose()
       terminalRef.current = null
       fitRef.current = null
       modifiersRef.current = false
       onReady?.(null)
     }
-  }, [session?.sessionId, onReady, modifiersRef])
+  }, [session?.sessionId, onReady, modifiersRef, foreign])
 
   useEffect(() => {
     if (!terminalRef.current) return
@@ -272,7 +343,7 @@ function AgentTerminalView({ session, onStatus, onReady, modifiersRef, foreign =
         if (!foreign) ws.request('agent', 'resize', { sessionId: session?.sessionId, cols: terminalRef.current.cols, rows: terminalRef.current.rows }).catch(() => {})
       } catch { /* terminal is switching */ }
     })
-  }, [terminalFontSize.value, session?.sessionId])
+  }, [terminalFontSize.value, session?.sessionId, foreign])
   useEffect(() => {
     if (!terminalRef.current) return
     terminalRef.current.options.disableStdin = session?.status !== 'running' || !canType
@@ -280,14 +351,27 @@ function AgentTerminalView({ session, onStatus, onReady, modifiersRef, foreign =
   }, [session?.status, canType])
   return <div class="agent-terminal-host" ref={host}>
     {searchOpen && <TerminalSearchBox addon={searchRef.current} onClose={() => { setSearchOpen(false); terminalRef.current?.focus() }} />}
-    <TerminalScrollButtons hostRef={host} terminalRef={terminalRef} />
+    <TerminalScrollButtons hostRef={host} terminalRef={terminalRef} terminal={terminalInstance} />
   </div>
 }
 
-export function AgentPanel() {
+// `workspacePath` pins the panel to a workspace pane; `paneId` lets global
+// events (harpy:new-agent) target a specific pane. Without them the panel
+// follows the globally selected workspace like the classic shell rail.
+export function AgentPanel({ workspacePath, paneId } = {}) {
+  const fixed = typeof workspacePath === 'string' && workspacePath.length > 0
+  // Pane-mounted instances never publish to the global agentSessions signal —
+  // the shell rail panel owns it, and a pane's session list must not leak
+  // into it (or two writers race on every update).
+  const pinned = fixed || typeof paneId === 'string'
+  const wsPath = () => (fixed ? workspacePath : workspace.value?.path) || ''
   const [agents, setAgents] = useState([])
   const [sessions, setSessions] = useState([])
-  useEffect(() => { agentSessions.value = sessions; return () => { agentSessions.value = [] } }, [sessions])
+  useEffect(() => {
+    if (pinned) return undefined
+    agentSessions.value = sessions
+    return () => { agentSessions.value = [] }
+  }, [sessions])
   const [activeSessionId, setActiveSessionId] = useState('')
   const [modalOpen, setModalOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -297,7 +381,15 @@ export function AgentPanel() {
   useEscape(modalOpen, () => setModalOpen(false))
   useEscape(!!installTarget, () => setInstallTarget(null))
   useEscape(!!closeConfirmSessionId, () => setCloseConfirmSessionId(''))
+  // Fullscreen CLI mode: Esc leaves, and closing the rail ends it too.
+  useEffect(() => {
+    const handler = (event) => { if (event.key === 'Escape') agentFullscreen.value = false }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
+  useEffect(() => { if (!agentRailOpen.value) agentFullscreen.value = false }, [agentRailOpen.value])
   const [busy, setBusy] = useState(false)
+  const [waking, setWaking] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
   // Presence: running agent sessions owned by other accounts. `watching` is
@@ -305,6 +397,7 @@ export function AgentPanel() {
   const [presence, setPresence] = useState([])
   const [presenceFiles, setPresenceFiles] = useState({})
   const [presenceOpen, setPresenceOpen] = useState({})
+  const [presenceListOpen, setPresenceListOpen] = useState(false)
   const presenceOpenRef = useRef({})
   const [watching, setWatching] = useState(null)
   const closedSessions = useRef(readClosedSessions())
@@ -336,10 +429,10 @@ export function AgentPanel() {
     loadingRef.current = true
     setRefreshing(true)
     const sequence = ++loadSequence.current
-    const requestedWorkspace = workspace.value?.path || ''
+    const requestedWorkspace = wsPath()
     try {
       const [list, currentSessions, others] = await Promise.all([ws.request('agent', 'agents', forceRefresh ? { refresh: true } : {}), ws.request('agent', 'sessions', { workspace: requestedWorkspace }), ws.request('agent', 'presence', {}).catch(() => [])])
-      if (sequence !== loadSequence.current || requestedWorkspace !== (workspace.value?.path || '')) return
+      if (sequence !== loadSequence.current || requestedWorkspace !== wsPath()) return
       setAgents(list)
       setPresence(others || [])
       // Keep recent stopped sessions as read-only history. The runner retains
@@ -360,7 +453,7 @@ export function AgentPanel() {
     } finally {
       loadingRef.current = false
       setRefreshing(false)
-      if (reloadRequestedRef.current || requestedWorkspace !== (workspace.value?.path || '')) {
+      if (reloadRequestedRef.current || requestedWorkspace !== wsPath()) {
         reloadRequestedRef.current = false
         window.setTimeout(() => load(), 0)
       }
@@ -368,7 +461,12 @@ export function AgentPanel() {
   }
 
   useEffect(() => {
-    const openNewSession = () => {
+    const openNewSession = (event) => {
+      // A pinned pane only answers events aimed at it — otherwise every
+      // mounted pane would pop the same modal at once. The shell panel
+      // ignores events carrying a pane target. The implicit leaf has no path
+      // yet but still owns its paneId, so key on `pinned`, not `fixed`.
+      if (pinned ? event?.detail?.paneId !== paneId : !!event?.detail?.paneId) return
       setError('')
       setModalOpen(true)
       load(true)
@@ -378,6 +476,7 @@ export function AgentPanel() {
       load()
     }
     const workspaceChange = () => {
+      if (fixed) return
       selectSession('')
       load()
     }
@@ -385,7 +484,7 @@ export function AgentPanel() {
     const presencePush = ws.on('agent', 'presence', () => { fetchPresence() })
     // Keep expanded "changed files" lists honest while the other side works.
     const fsPush = ws.on('fs', 'changed', (data) => {
-      if (String(data?.workspace || '') !== (workspace.value?.path || '')) return
+      if (String(data?.workspace || '') !== wsPath()) return
       for (const sessionId of Object.keys(presenceOpenRef.current)) {
         if (!presenceOpenRef.current[sessionId]) continue
         ws.request('agent', 'changedFiles', { sessionId }).then((files) => {
@@ -398,9 +497,10 @@ export function AgentPanel() {
       // this user's own tab list — reflect status only.
       if (event.owner && principal.value?.sub && event.owner !== principal.value.sub) {
         if (event.type === 'done') setWatching((current) => current?.sessionId === event.sessionId ? { ...current, status: 'stopped' } : current)
+        if (event.type === 'status' && event.status === 'sleeping') setWatching((current) => current?.sessionId === event.sessionId ? { ...current, status: 'sleeping' } : current)
         return
       }
-      const currentWorkspace = workspace.value?.path || ''
+      const currentWorkspace = wsPath()
       if (event.workspace && currentWorkspace && event.workspace !== currentWorkspace) return
       if (isClosedSession(closedSessions.current, event)) return
       // A completion event cannot create a usable tab. It may arrive just
@@ -414,9 +514,10 @@ export function AgentPanel() {
         const existing = current.find((session) => session.sessionId === event.sessionId)
         const nextIndex = Math.max(0, ...current.filter((item) => item.agent === event.agent).map((item) => Number(item.index) || 0)) + 1
         // Adapter status messages such as Claude's "ready" describe the
-        // provider, not the PTY lifecycle. Keep the tab live until `done`.
+        // provider, not the PTY lifecycle. Keep the tab live until `done`;
+        // 'sleeping' is a real lifecycle state emitted by the idle suspender.
         const nextStatus = event.type === 'status'
-          ? (event.status === 'stopped' ? 'stopped' : 'running')
+          ? (event.status === 'stopped' ? 'stopped' : event.status === 'sleeping' ? 'sleeping' : 'running')
           : (event.status || 'running')
         const next = existing
           ? current.map((session) => session.sessionId === event.sessionId
@@ -496,14 +597,14 @@ export function AgentPanel() {
 
   async function loadHandoffs() {
     try {
-      const items = await ws.request('agent', 'handoffs', { workspace: workspace.value?.path || '' })
+      const items = await ws.request('agent', 'handoffs', { workspace: wsPath() })
       setHandoffs(Array.isArray(items) ? items : [])
     } catch { setHandoffs([]) }
   }
 
   async function openMemory() {
     try {
-      const { path } = await ws.request('agent', 'memory', { workspace: workspace.value?.path || '' })
+      const { path } = await ws.request('agent', 'memory', { workspace: wsPath() })
       if (path) window.dispatchEvent(new CustomEvent('harpy:open-file', { detail: path }))
     } catch (requestError) { setError(requestError.message) }
   }
@@ -516,7 +617,7 @@ export function AgentPanel() {
       const prompt = handoffItem
         ? `Read .harpy/handoffs/${handoffItem.name} and continue the work it describes.`
         : ''
-      const session = await ws.request('agent', 'start', { agent: agent.id, workspace: workspace.value?.path || '', cols: 100, rows: 30, prompt })
+      const session = await ws.request('agent', 'start', { agent: agent.id, workspace: wsPath(), cols: 100, rows: 30, prompt })
       setSessions((current) => current.some((item) => item.sessionId === session.sessionId)
         ? current.map((item) => item.sessionId === session.sessionId ? { ...item, ...session } : item)
         : [...current, session])
@@ -536,7 +637,7 @@ export function AgentPanel() {
     setInstalling(true)
     setError('')
     try {
-      const { id } = await ws.request('pty', 'create', { cols: 100, rows: 30, workspace: workspace.value?.path || '', command: `${command}; echo "[harpy] install finished"` })
+      const { id } = await ws.request('pty', 'create', { cols: 100, rows: 30, workspace: wsPath(), command: `${command}; echo "[harpy] install finished"` })
       setInstallTarget(null)
       setModalOpen(false)
       panelOpen.value = true
@@ -590,6 +691,20 @@ export function AgentPanel() {
       setBroadcastResult(requestError.message)
     } finally {
       setBroadcastBusy(false)
+    }
+  }
+
+  async function wakeSession() {
+    if (!activeSession?.sessionId || waking) return
+    setWaking(true)
+    try {
+      const info = await ws.request('agent', 'wake', { sessionId: activeSession.sessionId })
+      setSessions((current) => current.map((session) => session.sessionId === info.sessionId ? { ...session, ...info } : session))
+      setWatching((current) => current?.sessionId === info.sessionId ? { ...current, ...info, foreign: true } : current)
+    } catch (requestError) {
+      if (!isConnectionError(requestError)) setError(requestError.message)
+    } finally {
+      setWaking(false)
     }
   }
 
@@ -658,8 +773,10 @@ export function AgentPanel() {
   }
 
   const closeConfirmSession = sessions.find((session) => session.sessionId === closeConfirmSessionId) || null
-  const liveSessions = sessions.filter((session) => session.status === 'running')
-  const historySessions = sessions.filter((session) => session.status !== 'running')
+  // Sleeping sessions keep their tab — they are suspended, not finished, and
+  // the wake action lives on the tab's terminal header.
+  const liveSessions = sessions.filter((session) => session.status === 'running' || session.status === 'sleeping')
+  const historySessions = sessions.filter((session) => session.status !== 'running' && session.status !== 'sleeping')
   // Broadcast targets: own running sessions, plus foreign ones for admins —
   // matching the same write rules sendToRunner enforces per session.
   const broadcastTargets = [
@@ -668,13 +785,14 @@ export function AgentPanel() {
   ]
 
   return (
-    <div class="agent-panel">
+    <div class={`agent-panel ${agentFullscreen.value ? 'agent-fullscreen' : ''}`}>
+      {agentFullscreen.value && <vscode-toolbar-button icon="screen-normal" class="agent-fs-exit" title={t('agent.exitFullscreen')} aria-label={t('agent.exitFullscreen')} onClick={() => { agentFullscreen.value = false }}></vscode-toolbar-button>}
       <div class="agent-session-tabs">
         <div class="agent-session-tabs-scroll">
           {liveSessions.map((session) => {
             const agent = agents.find((item) => item.id === session.agent)
-            return <button class={`agent-session-tab ${session.sessionId === activeSessionId ? 'active' : ''}`} type="button" key={session.sessionId} onClick={() => { selectSession(session.sessionId); activeAgent.value = session.agent }} title={sessionLabel(session)}>
-              <AgentLogo agent={agent} size={14} /><span>{sessionLabel(session)}</span>{session.status === 'running' && <i class="agent-session-live" />}<span class="agent-tab-close" role="button" tabIndex="0" onClick={(event) => requestCloseSession(event, session.sessionId)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') requestCloseSession(event, session.sessionId) }} title={t('agent.close')} aria-label={t('agent.close')}><X size={12} /></span>
+            return <button class={`agent-session-tab ${session.sessionId === activeSessionId ? 'active' : ''} ${session.status === 'sleeping' ? 'sleeping' : ''}`} type="button" key={session.sessionId} onClick={() => { selectSession(session.sessionId); activeAgent.value = session.agent }} title={sessionLabel(session)}>
+              <AgentLogo agent={agent} size={14} /><span>{sessionLabel(session)}</span>{session.status === 'running' && <i class="agent-session-live" />}{session.status === 'sleeping' && <Moon size={10} class="agent-session-sleep" />}<span class="agent-tab-close" role="button" tabIndex="0" onClick={(event) => requestCloseSession(event, session.sessionId)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') requestCloseSession(event, session.sessionId) }} title={t('agent.close')} aria-label={t('agent.close')}><X size={12} /></span>
             </button>
           })}
           {watching && <button class={`agent-session-tab watching ${watching.sessionId === activeSessionId ? 'active' : ''}`} type="button" onClick={() => selectSession(watching.sessionId)} title={t('agent.watching', { name: watching.ownerName || watching.owner })}>
@@ -690,12 +808,14 @@ export function AgentPanel() {
       }) : <span class="agent-history-empty">{t('agent.historyEmpty')}</span>}</vscode-scrollable>}
       <div class="agent-terminal-header">
         <span class="terminal-badge"><TerminalIcon size={13} /> {t('agent.terminalBadge')}</span>
-        {activeSession && <span class="agent-terminal-provider"><AgentLogo agent={agents.find((agent) => agent.id === activeSession.agent)} size={16} /><strong>{viewingForeign ? `${activeSession.ownerName} · ${sessionLabel(activeSession)}` : sessionLabel(activeSession)}</strong><code>{viewingForeign && !isAdmin.value ? t('agent.readonly') : ({ running: t('agent.status.running'), stopped: t('agent.status.stopped') }[activeSession.status] || activeSession.status)}</code></span>}
+        {activeSession && <span class="agent-terminal-provider"><AgentLogo agent={agents.find((agent) => agent.id === activeSession.agent)} size={16} /><strong>{viewingForeign ? `${activeSession.ownerName} · ${sessionLabel(activeSession)}` : sessionLabel(activeSession)}</strong><code>{viewingForeign && !isAdmin.value ? t('agent.readonly') : ({ running: t('agent.status.running'), stopped: t('agent.status.stopped'), sleeping: t('agent.status.sleeping') }[activeSession.status] || activeSession.status)}</code></span>}
         <span class="agent-header-spacer" />
+        {activeSession?.status === 'sleeping' && (!viewingForeign || isAdmin.value) && <vscode-button icon="debug-start" onClick={wakeSession} disabled={waking}>{waking ? t('agent.waking') : t('agent.wake')}</vscode-button>}
         {activeSession?.status === 'running' && (!viewingForeign || isAdmin.value) && <vscode-button secondary icon="debug-stop" onClick={() => stopSession(activeSession.sessionId)}>{t('agent.stop')}</vscode-button>}
         {broadcastTargets.length > 1 && <vscode-toolbar-button icon="megaphone" class={broadcastOpen ? 'active' : ''} title={t('agent.broadcast')} aria-label={t('agent.broadcast')} onClick={() => toggleBroadcast(broadcastTargets)}></vscode-toolbar-button>}
         {activeSession && <vscode-toolbar-button icon="search" title={t('terminal.search')} aria-label={t('terminal.search')} onClick={() => window.dispatchEvent(new CustomEvent('harpy:agent-search', { detail: activeSession.sessionId }))}></vscode-toolbar-button>}
         <vscode-toolbar-button icon="book" title={t('agent.memory')} aria-label={t('agent.memory')} onClick={openMemory}></vscode-toolbar-button>
+        <vscode-toolbar-button icon={agentFullscreen.value ? 'screen-normal' : 'screen-full'} title={agentFullscreen.value ? t('agent.exitFullscreen') : t('agent.fullscreen')} aria-label={agentFullscreen.value ? t('agent.exitFullscreen') : t('agent.fullscreen')} disabled={!activeSession} onClick={() => { agentFullscreen.value = !agentFullscreen.value }}></vscode-toolbar-button>
         <vscode-toolbar-button icon="refresh" class={refreshing ? 'spin' : ''} onClick={() => load(true)} disabled={refreshing} title={t('agent.refresh')} aria-label={t('agent.refresh')}></vscode-toolbar-button>
       </div>
       {broadcastOpen && <div class="agent-broadcast">
@@ -715,13 +835,17 @@ export function AgentPanel() {
         {broadcastResult && <span class="agent-broadcast-result">{broadcastResult}</span>}
       </div>}
       {presence.length > 0 && <div class="agent-presence">
-        {presence.map((foreign) => {
+        <button class="agent-presence-toggle" type="button" onClick={() => setPresenceListOpen((open) => !open)} aria-expanded={presenceListOpen}>
+          <i class="agent-presence-dot" />
+          <span>{t('agent.activeAgents', { count: presence.length })}</span>
+          {presenceListOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+        </button>
+        {presenceListOpen && presence.map((foreign) => {
           const agent = agents.find((item) => item.id === foreign.agent)
           const expanded = !!presenceOpen[foreign.sessionId]
           const files = presenceFiles[foreign.sessionId]
           return <div class="agent-presence-row" key={foreign.sessionId}>
             <button class="agent-presence-main" type="button" onClick={() => togglePresenceFiles(foreign)} title={expanded ? t('agent.hideFiles') : t('agent.showFiles')}>
-              <i class="agent-presence-dot" />
               <AgentLogo agent={agent} size={13} />
               <span class="agent-presence-copy"><strong>{foreign.ownerName}</strong><span>{sessionLabel(foreign)}</span></span>
               {files && <span class="agent-presence-count">{t('agent.files', { count: files.length })}</span>}
@@ -734,8 +858,17 @@ export function AgentPanel() {
           </div>
         })}
       </div>}
+      <RigsPanel />
       <div class="agent-console agent-terminal-console">
-        {activeSession ? <div class="terminal-mobile-stage"><AgentTerminalView key={activeSession.sessionId} session={activeSession} onStatus={updateStatus} onReady={handleAgentReady} modifiersRef={agentModifiersRef} foreign={viewingForeign} /><TerminalAccessory terminalId={activeSession.sessionId} actionsRef={agentActionsRef} modifiersRef={agentModifiersRef} /></div> : <div class="agent-empty-terminal"><TerminalIcon size={20} /><span>{t('agent.noSession')}</span><vscode-button icon="add" onClick={() => { setModalOpen(true); load(true); loadHandoffs() }}>{t('agent.new')}</vscode-button></div>}
+        {activeSession ? <div class="terminal-mobile-stage"><AgentTerminalView key={activeSession.sessionId} session={activeSession} onStatus={updateStatus} onReady={handleAgentReady} modifiersRef={agentModifiersRef} foreign={viewingForeign} paneVisible={fixed ? true : undefined} /><TerminalAccessory terminalId={activeSession.sessionId} actionsRef={agentActionsRef} modifiersRef={agentModifiersRef} /></div> : <div class="agent-empty-terminal"><TerminalIcon size={20} /><span>{t('agent.noSession')}</span><vscode-button icon="add" onClick={() => { setModalOpen(true); load(true); loadHandoffs() }}>{t('agent.new')}</vscode-button></div>}
+        {activeSession?.status === 'sleeping' && <div class="agent-sleep-overlay">
+          <div class="agent-sleep-card">
+            <Moon size={30} />
+            <strong>{sessionLabel(activeSession)}</strong>
+            <span>{viewingForeign && !isAdmin.value ? t('agent.sleepingForeign') : t('agent.sleepingHint')}</span>
+            {(!viewingForeign || isAdmin.value) && <vscode-button class="agent-wake-button" icon="debug-start" onClick={wakeSession} disabled={waking}>{waking ? t('agent.waking') : t('agent.wake')}</vscode-button>}
+          </div>
+        </div>}
         {error && <div class="error-text agent-error">{error}</div>}
       </div>
       {modalOpen && <div class="agent-modal-backdrop" role="presentation" onClick={(event) => { if (event.target === event.currentTarget) setModalOpen(false) }}><section class="agent-modal" role="dialog" aria-modal="true" aria-labelledby="agent-modal-title"><div class="agent-modal-heading"><strong id="agent-modal-title">{t('agent.new')}</strong><span class="agent-modal-heading-actions"><vscode-toolbar-button icon="refresh" onClick={() => load(true)} disabled={refreshing} title={t('agent.refresh')} aria-label={t('agent.refresh')}></vscode-toolbar-button><vscode-toolbar-button icon="close" onClick={() => setModalOpen(false)} title={t('common.cancel')} aria-label={t('common.cancel')}></vscode-toolbar-button></span></div><p>{t('agent.chooseCli')}</p><vscode-scrollable class="agent-modal-list">{refreshing && <div class="agent-modal-loading"><vscode-progress-ring /></div>}{!agents.length && <div class="agent-modal-empty"><span>{error || t('agent.none')}</span><vscode-button secondary icon="refresh" onClick={() => load(true)} disabled={refreshing}>{t('agent.refresh')}</vscode-button></div>}{agents.map((agent) => <button class={`agent-modal-item ${agent.available ? '' : 'unavailable'}`} type="button" disabled={busy} key={agent.id} onClick={() => (agent.available ? openAgent(agent) : setInstallTarget(agent))}><span class="agent-picker-logo"><AgentLogo agent={agent} size={22} /></span><span><strong>{agent.label}</strong><small>{agent.cli}{agent.available ? '' : ` · ${t('agent.missing')}`}</small></span>{agent.available ? <Maximize2 size={13} /> : <Download size={13} />}</button>)}</vscode-scrollable>{handoffs.length > 0 && <div class="agent-handoffs"><p class="agent-handoffs-title"><History size={13} />{t('agent.continueHandoff')}</p><div class="agent-handoffs-list">{handoffs.map((item) => { const adapter = agents.find((entry) => entry.id === item.agent); return <button class="agent-handoff-item" type="button" key={item.name} disabled={busy || !adapter?.available} title={adapter?.available ? item.name : t('agent.handoffMissing', { agent: item.agent })} onClick={() => adapter && openAgent(adapter, item)}><AgentLogo agent={adapter} size={15} /><span><strong>{adapter?.label || item.agent}</strong><small>{new Date(item.ts).toLocaleString()}</small></span><BookOpen size={12} /></button> })}</div></div>}</section></div>}

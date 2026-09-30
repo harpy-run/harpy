@@ -8,9 +8,9 @@ import { VERSION } from './config.js'
 // from either. Which channel *applies* the update depends on how this copy
 // was installed (global npm package vs git checkout).
 
-const NPM_PACKAGE = '@pixelbyte-software/pixcode'
-const NPM_LATEST_URL = 'https://registry.npmjs.org/@pixelbyte-software%2Fpixcode/latest'
-const REPO = 'alicomert/pixcode'
+const NPM_PACKAGE = 'harpy-run'
+const NPM_LATEST_URL = 'https://registry.npmjs.org/harpy-run/latest'
+const REPO = 'harpy-run/harpy'
 const RELEASE_API = `https://api.github.com/repos/${REPO}/releases/latest`
 const TAGS_API = `https://api.github.com/repos/${REPO}/tags?per_page=30`
 export const RELEASE_PAGE = `https://github.com/${REPO}/releases/latest`
@@ -42,7 +42,7 @@ async function fetchJson(url, timeout = 6000) {
   try {
     const response = await fetch(url, {
       signal: controller.signal,
-      headers: { 'user-agent': `pixcode/${VERSION}`, accept: 'application/json' }
+      headers: { 'user-agent': `harpy/${VERSION}`, accept: 'application/json' }
     })
     if (!response.ok) return null
     return await response.json()

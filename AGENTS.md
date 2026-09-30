@@ -65,7 +65,7 @@ backend first, then `node scripts/smoke.mjs`.
 
 - `smoke.mjs` — `BASE` defaults to `http://localhost:3001`. Performs first-run
   setup itself using `HARPY_SMOKE_PASSWORD` (default `secret123`). Asserts the
-  WS `agent.agents` reply has exactly **7** adapters — keep this in sync if you
+  WS `agent.agents` reply has exactly **8** adapters — keep this in sync if you
   add/remove an adapter in `server/agents/adapters/`.
 - `agent-terminal-smoke.mjs` — `BASE` defaults to `http://127.0.0.1:3231`
   (different port — set `BASE` or run a second server on 3231). Requires at least
@@ -125,6 +125,22 @@ backend first, then `node scripts/smoke.mjs`.
   `workspaceCwd`/`workspacePath` take `{allowOutside}` only for that path.
   WS channel `automation` (list/read = access, save/remove/toggle/runNow =
   admin); `setAutomationNotifier` broadcasts `automation.changed`.
+  `server/channels/rig.channel.js` integrates OpenRig (`rig` CLI) without
+  touching its daemon API: every op shells out to `rig ... --json`
+  (`overview`, `seats --full`, `send`, `capture`) or opens a pty terminal
+  (`attach` → `tmux attach-session`). `boot`/`down` run `rig up/down --json
+  --yes` in the background (no terminal) and return a per-seat result
+  summary; `rig up` reports failures as exit-0 JSON `{error}` — surface
+  those inline. Seat normalization whitelists fields — `rig ps --full`
+  carries `resumeToken` secrets that must never reach a socket frame. Read
+  ops ride the caller's `openrig` agent allowlist entry; control ops are
+  admin-only since seats are daemon-user processes. No server-side polling —
+  clients refresh while the RigsPanel section is expanded. `RigsPanel` is
+  the compact agent-rail strip; `FleetView` (opened via the `$fleet`
+  sentinel editor tab, `openFleet()`) is the full-area dashboard with rig
+  chips, a seat card grid, a peek/send detail pane and a user-controlled
+  poll interval (pausable); while the fleet tab is active the agent rail
+  auto-parks and restores on leave.
 - `src/` — Preact frontend. Entry `src/main.jsx` → `App.jsx`. State via
   `@preact/signals` (`src/state/`). Styling is **Tailwind v4** through
   `@tailwindcss/vite` (CSS entry `src/styles/tailwind.css`), not a tailwind config.
@@ -136,20 +152,23 @@ backend first, then `node scripts/smoke.mjs`.
 
 ## Agent adapters
 
-Seven adapters live in `server/agents/adapters/`: `claude`, `codex`, `devin`,
-`gemini`, `qwen`, `opencode`, `grok`. Each wraps an external CLI detected via
-a PATH scan (`server/util/env.js` builds a service-friendly PATH from the
-login shell plus well-known dirs, also used for agent/pty spawn env);
-`available` is false if the binary is missing. Only `claude` and
-`devin` set `interactive: true`. Each adapter may also declare `static
+Eight adapters live in `server/agents/adapters/`: `claude`, `codex`, `devin`,
+`gemini`, `qwen`, `opencode`, `grok`, `openrig`. Each wraps an external CLI
+detected via a PATH scan (`server/util/env.js` builds a service-friendly PATH
+from the login shell plus well-known dirs, also used for agent/pty spawn env);
+`available` is false if the binary is missing. Only `claude`, `devin` and
+`openrig` set `interactive: true` — `openrig` is an orchestrator, not a chat
+CLI, so its session is just the `rig tui` dashboard attached to the PTY; rig
+seats run in detached tmux outside harpy's process tree and survive the tab.
+Each adapter may also declare `static
 install` (`{ command, windows? }`) — the CLI's one-line installer, shown in
 the new-session modal so an unavailable agent can be installed in a visible
 terminal. Detection results are cached in `$HARPY_HOME/agent-availability.json`
 for 24h (probing scans the login-shell/known-dir PATH, not just the service
 PATH); `agent.agents` with `{ refresh: true }` forces a re-check, the server
 re-probes hourly and broadcasts `agent.agents` when availability changes,
-and opening the new-session modal triggers a fresh check. Adding an
-8th requires updating `registerAllAdapters` **and** the `agents.length !== 7`
+and opening the new-session modal triggers a fresh check. Adding a
+9th requires updating `registerAllAdapters` **and** the `agents.length !== 8`
 assertion in `scripts/smoke.mjs`.
 
 ## Auth & config

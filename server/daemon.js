@@ -10,15 +10,15 @@ import { config, VERSION } from './config.js'
 // npm install small while still giving the server the same always-on behaviour
 // as the legacy desktop wrapper.
 const DAEMON_DIR = path.join(config.dataDir, 'daemon')
-const PID_FILE = path.join(DAEMON_DIR, 'pixcode.pid')
+const PID_FILE = path.join(DAEMON_DIR, 'harpy.pid')
 const STATE_FILE = path.join(DAEMON_DIR, 'state.json')
-const LOG_FILE = path.join(DAEMON_DIR, 'pixcode.log')
-const SERVICE_NAME = 'pixcode.service'
+const LOG_FILE = path.join(DAEMON_DIR, 'harpy.log')
+const SERVICE_NAME = 'harpy.service'
 const LINUX_UNIT = path.join(os.homedir(), '.config', 'systemd', 'user', SERVICE_NAME)
 const LINUX_SYSTEM_UNIT = `/etc/systemd/system/${SERVICE_NAME}`
-const LINUX_AUTOSTART = path.join(os.homedir(), '.config', 'autostart', 'pixcode.desktop')
-const MAC_LAUNCH_AGENT = path.join(os.homedir(), 'Library', 'LaunchAgents', 'com.pixcode.server.plist')
-const WINDOWS_STARTUP = path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'Pixcode.cmd')
+const LINUX_AUTOSTART = path.join(os.homedir(), '.config', 'autostart', 'harpy.desktop')
+const MAC_LAUNCH_AGENT = path.join(os.homedir(), 'Library', 'LaunchAgents', 'com.harpy.server.plist')
+const WINDOWS_STARTUP = path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'Harpy.cmd')
 const CLI_ENTRY = fileURLToPath(new URL('./cli.js', import.meta.url))
 
 
@@ -85,7 +85,7 @@ async function waitForListening(port, timeout = 5_000) {
   return status
 }
 
-// Kills pixcode daemon processes still bound to the port after the supervised
+// Kills harpy daemon processes still bound to the port after the supervised
 // stop — earlier builds could leave a detached child behind that kept the port
 // and made every subsequent restart report "port already in use".
 function reapOrphanedListeners(port) {
@@ -149,19 +149,19 @@ function probePort(port, timeout = 900) {
   })
 }
 
-// Asks the HTTP server on a port who it is. A live pixcode answers
-// `{name:'pixcode'}` from /api/health — anything else (or nothing) means the
+// Asks the HTTP server on a port who it is. A live harpy answers
+// `{name:'harpy'}` from /api/health — anything else (or nothing) means the
 // port belongs to a foreign process and must not be touched.
 export async function healthProbe(port, timeout = 1200) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeout)
   try {
     const response = await fetch(`http://127.0.0.1:${normalizePort(port)}/api/health`, { signal: controller.signal })
-    if (!response.ok) return { occupied: true, pixcode: false }
+    if (!response.ok) return { occupied: true, harpy: false }
     const data = await response.json()
-    return { occupied: true, pixcode: data?.name === 'pixcode', version: data?.version || null }
+    return { occupied: true, harpy: data?.name === 'harpy', version: data?.version || null }
   } catch {
-    return { occupied: false, pixcode: false }
+    return { occupied: false, harpy: false }
   } finally {
     clearTimeout(timer)
   }
@@ -235,7 +235,7 @@ export async function startDaemon({ port = config.port, workspace } = {}) {
     cwd: path.dirname(CLI_ENTRY),
     detached: true,
     windowsHide: true,
-    env: { ...process.env, PORT: String(normalizedPort), PIXCODE_DAEMON_CHILD: '1' },
+    env: { ...process.env, PORT: String(normalizedPort), HARPY_DAEMON_CHILD: '1' },
     stdio: ['ignore', log, log]
   })
   child.once('error', (error) => {
@@ -293,26 +293,26 @@ export async function stopDaemon() {
 
 function linuxUnit({ port, workspace }) {
   const command = commandString({ port, workspace })
-  return `[Unit]\nDescription=Pixcode background server\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nExecStart=${command}\nRestart=on-failure\nRestartSec=2\nEnvironment=PIXCODE_DAEMON_CHILD=1\n\n[Install]\nWantedBy=default.target\n`
+  return `[Unit]\nDescription=Harpy background server\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nExecStart=${command}\nRestart=on-failure\nRestartSec=2\nEnvironment=HARPY_DAEMON_CHILD=1\n\n[Install]\nWantedBy=default.target\n`
 }
 
 function linuxDesktop({ port, workspace }) {
-  return `[Desktop Entry]\nType=Application\nName=Pixcode\nComment=Pixcode background server\nExec=${commandString({ port, workspace })}\nTerminal=false\nX-GNOME-Autostart-enabled=true\n`
+  return `[Desktop Entry]\nType=Application\nName=Harpy\nComment=Harpy background server\nExec=${commandString({ port, workspace })}\nTerminal=false\nX-GNOME-Autostart-enabled=true\n`
 }
 
 function macLaunchAgent({ port, workspace }) {
   const values = shellArgs({ port, workspace }).map((item) => `<string>${String(item).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</string>`).join('')
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>Label</key><string>com.pixcode.server</string><key>ProgramArguments</key><array><string>${process.execPath}</string>${values}</array><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>StandardOutPath</key><string>${LOG_FILE}</string><key>StandardErrorPath</key><string>${LOG_FILE}</string></dict></plist>\n`
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>Label</key><string>com.harpy.server</string><key>ProgramArguments</key><array><string>${process.execPath}</string>${values}</array><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>StandardOutPath</key><string>${LOG_FILE}</string><key>StandardErrorPath</key><string>${LOG_FILE}</string></dict></plist>\n`
 }
 
 function windowsStartup({ port, workspace }) {
   const command = commandString({ port, workspace })
-  return `@echo off\r\nstart "Pixcode" /b ${command}\r\n`
+  return `@echo off\r\nstart "Harpy" /b ${command}\r\n`
 }
 
 export function autostartStatus() {
   if (process.platform === 'linux') {
-    // A system-level unit (e.g. /etc/systemd/system/pixcode.service) manages
+    // A system-level unit (e.g. /etc/systemd/system/harpy.service) manages
     // the server too; report it so status does not claim autostart is off.
     if (fs.existsSync(LINUX_UNIT)) return { enabled: true, mode: 'systemd', path: LINUX_UNIT }
     if (fs.existsSync(LINUX_SYSTEM_UNIT)) return { enabled: true, mode: 'systemd-system', path: LINUX_SYSTEM_UNIT }

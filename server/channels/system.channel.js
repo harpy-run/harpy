@@ -18,7 +18,7 @@ const updateLog = () => path.join(config.dataDir, 'update.log')
 // stop` SIGTERMs every process in the service cgroup — a plain child of the
 // daemon would die mid-update. When INVOCATION_ID is set (systemd-managed)
 // the updater runs as its own transient oneshot unit, outside the daemon's
-// cgroup, logging to journald and $PIXCODE_HOME/update.log.
+// cgroup, logging to journald and $HARPY_HOME/update.log.
 export const systemChannel = {
   ops: {
     updateCheck: async (ctx) => {
@@ -32,7 +32,7 @@ export const systemChannel = {
       mkdirSync(config.dataDir, { recursive: true })
       if (process.env.INVOCATION_ID) {
         const child = spawn('systemd-run', [
-          '--unit', `pixcode-update-${Date.now()}`,
+          '--unit', `harpy-update-${Date.now()}`,
           '--service-type=oneshot',
           '--collect',
           '--same-dir',
@@ -40,7 +40,7 @@ export const systemChannel = {
           '-p', `StandardError=append:${updateLog()}`,
           '--setenv', `HOME=${os.homedir()}`,
           '--setenv', `PATH=${process.env.PATH || '/usr/bin:/bin'}`,
-          '--setenv', `PIXCODE_HOME=${config.dataDir}`,
+          '--setenv', `HARPY_HOME=${config.dataDir}`,
           process.execPath, cliPath, 'update', '--yes',
         ], { detached: true, stdio: 'ignore' })
         child.unref()

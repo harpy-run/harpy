@@ -10,6 +10,7 @@ export class GeminiAdapter extends Adapter {
 
   buildTerminalArgs() { return [] }
   buildResumeArgs() { return ['--resume'] }
-  buildArgs({ prompt } = {}) { return ['-p', prompt || ''] }
+  // --yolo auto-approves tool calls so the headless digest can write MEMORY.md.
+  buildArgs({ prompt } = {}) { return ['-p', prompt || '', '--yolo'] }
   normalizeLine(line) { return [{ type: 'message', role: 'assistant', text: line, partial: true }] }
 }

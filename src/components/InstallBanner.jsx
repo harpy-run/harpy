@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'preact/hooks'
 import { t } from '../lib/i18n.js'
 
-const DISMISS_KEY = 'pixcode.installBannerDismissed'
+const DISMISS_KEY = 'harpy.installBannerDismissed'
 
 function isInstalled() {
   return navigator.standalone === true

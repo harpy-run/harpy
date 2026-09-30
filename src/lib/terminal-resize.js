@@ -12,7 +12,7 @@ export function watchTerminalResize(host, fit, terminal, onResize) {
     frame = requestAnimationFrame(() => {
       frame = requestAnimationFrame(() => {
         frame = 0
-        if (disposed || !host.isConnected) return
+        if (disposed || !host.isConnected || document.visibilityState === 'hidden') return
         const rect = host.getBoundingClientRect()
         if (rect.width < 4 || rect.height < 4) return
         try {
@@ -42,7 +42,7 @@ export function watchTerminalResize(host, fit, terminal, onResize) {
   window.addEventListener('resize', schedule)
   window.addEventListener('orientationchange', schedule)
   window.addEventListener('pageshow', schedule)
-  window.addEventListener('pixcode:ws-open', schedule)
+  window.addEventListener('harpy:ws-open', schedule)
   document.addEventListener('visibilitychange', schedule)
   document.fonts?.ready.then(schedule).catch(() => {})
   schedule()
@@ -54,7 +54,7 @@ export function watchTerminalResize(host, fit, terminal, onResize) {
     window.removeEventListener('resize', schedule)
     window.removeEventListener('orientationchange', schedule)
     window.removeEventListener('pageshow', schedule)
-    window.removeEventListener('pixcode:ws-open', schedule)
+    window.removeEventListener('harpy:ws-open', schedule)
     document.removeEventListener('visibilitychange', schedule)
   }
   // Consumers can request another measurement after an async history restore

@@ -1,6 +1,6 @@
 import { CURRENT_VERSION, compareVersions } from './updater.js'
 
-const TOKEN_KEY = 'pixcode.token'
+const TOKEN_KEY = 'harpy.token'
 
 // Tauri serves the built UI from its own origin. Point desktop requests at
 // the bundled local server; browser/Vite builds keep using relative URLs so
@@ -51,7 +51,7 @@ async function request(method, path, body, origin = backendOrigin) {
   // surfaces its own error.
   if (response.status === 401 && getToken() && path !== '/api/auth/login' && path !== '/api/auth/setup' && typeof window !== 'undefined') {
     setToken('')
-    window.dispatchEvent(new Event('pixcode:auth-expired'))
+    window.dispatchEvent(new Event('harpy:auth-expired'))
   }
   if (!response.ok) throw Object.assign(new Error(data?.error || response.statusText), { status: response.status })
   return data
@@ -62,11 +62,11 @@ async function desktopHealth() {
   for (const origin of desktopOrigins()) {
     try {
       const data = await request('GET', '/api/health', undefined, origin)
-      // A previous Pixcode daemon may still own port 3001 while the bundled
+      // A previous Harpy daemon may still own port 3001 while the bundled
       // desktop server has moved to 3002. Never attach the UI to an older
       // protocol instance; continue scanning until the current server is
       // found instead.
-      if (data?.name !== 'pixcode' || compareVersions(data.version, CURRENT_VERSION) < 0) throw new Error('outdated Pixcode server')
+      if (data?.name !== 'harpy' || compareVersions(data.version, CURRENT_VERSION) < 0) throw new Error('outdated Harpy server')
       backendOrigin = origin
       return data
     } catch (error) {

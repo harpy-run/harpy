@@ -40,7 +40,7 @@ export function skillsDirFor({ agent, scope, sub, workspace } = {}) {
     if (!workspace) throw httpError(400, 'workspace required')
     return path.join(workspace, '.claude', 'skills')
   }
-  const rel = AGENT_SKILL_DIRS[agent] || path.join('.pixcode', 'skills', String(agent || 'agent'))
+  const rel = AGENT_SKILL_DIRS[agent] || path.join('.harpy', 'skills', String(agent || 'agent'))
   return path.join(homeForSub(sub), rel)
 }
 
