@@ -228,6 +228,8 @@
   "agent.installNoCommand": "{name} için bilinen otomatik kurulum komutu yok.",
   "agent.none": "Ajan bulunamadı",
   "agent.chooseCli": "Yeni bir terminal oturumu için CLI seçin",
+  "agent.harpyTeamCli": "Harpy Team CLI",
+  "agent.harpyTeamCliHint": "yerleşik kabuk — takımlar, botlar, / komutları",
   "agent.noSession": "Açık agent terminali yok",
   "agent.close": "Oturumu kapat",
   "agent.closeTitle": "Agent oturumunu kapat",

@@ -228,6 +228,8 @@
   "agent.installNoCommand": "No automatic install command is known for {name}.",
   "agent.none": "No agent available",
   "agent.chooseCli": "Choose a CLI for a new terminal session",
+  "agent.harpyTeamCli": "Harpy Team CLI",
+  "agent.harpyTeamCliHint": "the built-in shell — teams, bots, / commands",
   "agent.noSession": "No agent terminal is open",
   "agent.close": "Close session",
   "agent.closeTitle": "Close agent session",

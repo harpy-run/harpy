@@ -2056,6 +2056,11 @@ vscode-badge, .git-count, .git-badge, .agent-presence-count,
 }
 
 .agent-modal-item.unavailable { opacity: .55; }
+/* The Harpy Team CLI is the product's own shell — pin it visually above the
+   third-party adapters with an accent edge and a divider gap. */
+.agent-modal-item-harpy { border-color: var(--ui-accent-strong); background: var(--ui-accent-soft); margin-bottom: 8px; }
+.agent-modal-item-harpy:hover { border-color: var(--ui-accent-hover); }
+.agent-modal-item-harpy + .agent-modal-item { margin-top: 4px; }
 .agent-modal-item > span:nth-child(2) { display: flex; min-width: 0; flex: 1; flex-direction: column; }
 .agent-modal-item strong { font-size: 12px; font-weight: 550; }
 .agent-modal-item small { color: var(--ui-muted); font: 10px var(--mono); }
