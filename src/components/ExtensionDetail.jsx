@@ -3,24 +3,11 @@ import { ws } from '../lib/ws.js'
 import { t } from '../lib/i18n.js'
 import { activeView, isAdmin, mobileTab, panelOpen, setAgentRail, workspace } from '../state/app.js'
 
-const RIG_REPO = 'https://github.com/mvschwarz/openrig'
-const RIG_RAW = 'https://raw.githubusercontent.com/mvschwarz/openrig/main/'
-
-// Installable extensions that render a store-style detail page in the editor
-// area. `agent` links the entry to an adapter id from `agent.agents`.
-export const EXTENSIONS = {
-  openrig: {
-    label: 'OpenRig',
-    icon: '/icons/openrig.svg',
-    publisher: 'mvschwarz',
-    license: 'Apache-2.0',
-    agent: 'openrig',
-    installCommand: 'npm install -g @openrig/cli',
-    repo: RIG_REPO,
-    readmeApi: 'https://api.github.com/repos/mvschwarz/openrig/readme',
-    rawBase: RIG_RAW
-  }
-}
+// Installable extensions render a store-style detail page in the editor
+// area. `agent` links an entry to an adapter id from `agent.agents`. The
+// registry is currently empty — new entries carry the same shape the
+// removed orchestrator card used.
+export const EXTENSIONS = {}
 
 export function extensionLabel(id) {
   return EXTENSIONS[id]?.label || id

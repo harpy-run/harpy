@@ -11,7 +11,9 @@ function usage() {
 Usage: harpy <command>
 
 Commands:
-  (none)                                Interactive dashboard
+  (none)                                Interactive agent shell
+  chat <prompt> [--agent ID] [--cwd P]  One-shot question, or open the shell
+  dash                                  Status dashboard menu
   start [--port N] [--workspace PATH]  Start the server in the foreground
   daemon <command>                     Manage the background server
   settings [set <key> <value>]         View or change CLI settings
@@ -101,7 +103,7 @@ function openBrowser(url) {
 // --- interactive home -----------------------------------------------------
 
 async function home() {
-  const { daemonStatus, stopDaemon, startDaemon, readDaemonLog, installAutostart, removeAutostart } = await import('./daemon.js')
+  const { daemonStatus, startDaemon, installAutostart, removeAutostart } = await import('./daemon.js')
 
   // First run: the wizard owns the screen — the language question comes
   // first and every following prompt renders in the picked language. It ends
@@ -130,16 +132,25 @@ async function home() {
     }
   }
 
+  if (!isInteractive()) {
+    printDaemonResult(await daemonStatus({ port: resolvePort() }))
+    return
+  }
+
+  // Bare `harpy` opens the agent shell — the codex-style REPL that chats
+  // with any installed CLI and drives daemon teams. The classic status menu
+  // stays one word away: `harpy dash`.
+  const { chatShell } = await import('./cli-shell.js')
+  await chatShell({})
+}
+
+// The menu-driven dashboard kept intact as `harpy dash`.
+async function dashboard() {
+  const { daemonStatus, stopDaemon, startDaemon, readDaemonLog } = await import('./daemon.js')
   const t = translator(cliLang())
   const settings = readCliConfig()
   const port = resolvePort()
   const status = await daemonStatus({ port })
-
-  if (!isInteractive()) {
-    printDaemonResult(status)
-    return
-  }
-
   const label = (s) => s.padEnd(13)
   const rows = [
     `${label(t('rowStatus'))}${status.running ? c.ok(`● ${t('stRunning')}`) : c.dim(`○ ${t('stStopped')}`)}${status.pid ? c.dim(` · pid ${status.pid}`) : ''}`,
@@ -519,6 +530,24 @@ async function updateFlow(options) {
   console.log(`  ${c.ok('✓')} ${t('updDone', { mode: result.mode, steps: result.steps.join(', ') })}`)
 }
 
+// `harpy chat [prompt] [-a agent] [--cwd dir] [--once]` — flag-bearing entry
+// into the same shell bare `harpy` opens. A prompt (or piped input, handled by
+// chatShell itself) means one-shot: run the turn, print the reply, exit.
+async function chatCommand(args) {
+  const options = {}
+  const promptParts = []
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]
+    if (a === '--agent' || a === '-a') options.agent = args[++i]
+    else if (a === '--cwd') options.cwd = args[++i]
+    else if (a === '--once' || a === '-1') { /* explicit one-shot — implied by a prompt */ }
+    else promptParts.push(a)
+  }
+  const prompt = promptParts.join(' ').trim()
+  const { chatShell } = await import('./cli-shell.js')
+  await chatShell({ agent: options.agent, cwd: options.cwd, prompt: prompt || null })
+}
+
 // --- daemon command ----------------------------------------------------------
 
 async function daemonCommand(args) {
@@ -596,6 +625,14 @@ async function main() {
   if (command === 'version') {
     const { VERSION } = await import('./config.js')
     console.log(VERSION)
+    return
+  }
+  if (command === 'chat' || command === 'shell') {
+    await chatCommand(args)
+    return
+  }
+  if (command === 'dash' || command === 'dashboard') {
+    await dashboard()
     return
   }
   if (command === 'daemon') {

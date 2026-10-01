@@ -35,8 +35,8 @@ export const agentChannel = {
       if (access.agents && !access.agents.has(String(data.agent || ''))) throw httpError(403, 'agent is not assigned to this account')
       // Forward only the public fields — in particular `automation` stays
       // server-owned, because it relaxes the cwd workspace check.
-      const { agent, prompt, cwd, workspace, cols, rows } = data
-      return startRunner(ctx, { agent, prompt, cwd, workspace, cols, rows })
+      const { agent, prompt, cwd, workspace, cols, rows, team } = data
+      return startRunner(ctx, { agent, prompt, cwd, workspace, cols, rows, team })
     },
     input: (ctx, { sessionId, data } = {}) => inputRunner(ctx, sessionId, data),
     resize: (ctx, { sessionId, cols, rows } = {}) => resizeRunner(ctx, sessionId, cols, rows),

@@ -63,6 +63,7 @@ function persistSessions() {
         automation: session.automation || undefined,
         owner: session.owner,
         index: session.index,
+        team: session.team || undefined,
         startedAt: session.startedAt,
         sleepingAt: session.sleepingAt || 0,
         status: session.state.status
@@ -429,7 +430,8 @@ export async function restoreSessions() {
       autoRestarted: false,
       resumedAt: 0,
       lastActivityAt: record.startedAt || Date.now(),
-      sleepingAt: Number(record.sleepingAt) || 0
+      sleepingAt: Number(record.sleepingAt) || 0,
+      team: record.team || null
     }
     sessions.set(session.sessionId, session)
     // Sleeping sessions come back as resumable records — no process until a
@@ -487,7 +489,7 @@ export async function wakeRunner(ctx, sessionId) {
   return sessionInfo(session)
 }
 
-export async function startRunner(ctx, { agent, prompt = '', cwd, workspace, cols = 100, rows = 30, automation } = {}) {
+export async function startRunner(ctx, { agent, prompt = '', cwd, workspace, cols = 100, rows = 30, automation, team } = {}) {
   const AdapterClass = getAdapter(agent)
   if (!AdapterClass) throw httpError(400, 'unknown agent')
   const sessionId = `s_${++counter}`
@@ -530,7 +532,10 @@ export async function startRunner(ctx, { agent, prompt = '', cwd, workspace, col
     lastActivityAt: Date.now(),
     sleepingAt: 0,
     automation: automation || null,
-    ownerName: ctx?.principal?.username || ownerKey(ctx)
+    ownerName: ctx?.principal?.username || ownerKey(ctx),
+    // A team is just a label on the session — the same "seats in a rig"
+    // grouping, without an external orchestrator.
+    team: String(team || '').trim().slice(0, 64) || null
   }
   let args
   try {
@@ -565,6 +570,7 @@ function sessionInfo(session) {
     workspace: session.workspace,
     cwd: session.state.cwd,
     automation: session.automation || null,
+    team: session.team || null,
     pid: session.term?.pid || null,
     sleepingAt: session.sleepingAt || 0,
     lastActivityAt: session.lastActivityAt || 0

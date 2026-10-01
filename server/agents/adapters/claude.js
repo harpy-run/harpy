@@ -10,6 +10,16 @@ export class ClaudeAdapter extends Adapter {
 
   buildTerminalArgs() { return [] }
   buildResumeArgs() { return ['--continue'] }
+  // Headless follow-up: --resume <id> targets the conversation this shell
+  // started (captured from the init frame); --continue is the fallback and
+  // picks the most recent conversation in this cwd.
+  buildContinueArgs({ prompt, sessionId } = {}) {
+    const args = this.buildArgs({ prompt })
+    const flag = sessionId ? ['--resume', sessionId] : ['--continue']
+    if (prompt) args.splice(-1, 0, ...flag)
+    else args.push(...flag)
+    return args
+  }
   buildArgs({ prompt } = {}) {
     // Skip-permissions is required for the headless memory digest to write
     // MEMORY.md — without it every file edit stalls on an approval nobody sees.

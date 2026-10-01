@@ -6,13 +6,13 @@ import { initFsWatch, refreshFsWatch } from '../lib/fs-watch.js'
 import { WorkspaceArea } from './WorkspacePanes.jsx'
 import { initNotifications, notificationsEnabled, setNotificationsEnabled } from '../lib/notify.js'
 import { setToken } from '../lib/api.js'
-import { activePaneId, activeView, agentRailOpen, isAdmin, agentSessions, agentWidth, leafList, mobileTab, openExtension, openFile, paneAreaVisible, paneLayouts, panelHeight, panelOpen, pendingFileAction, setAgentRail, setAgentWidth, setPanelHeight, setSidebarWidth, setTerminalFontSize, setTerminalScrollSpeed, setTheme, setViewMode, sidebarWidth, terminalFontSize, terminalScrollSpeed, theme, viewMode, workspace } from '../state/app.js'
+import { activePaneId, activeView, agentRailOpen, isAdmin, agentSessions, agentWidth, leafList, mobileTab, openFile, paneAreaVisible, paneLayouts, panelHeight, panelOpen, pendingFileAction, setAgentRail, setAgentWidth, setPanelHeight, setSidebarWidth, setTerminalFontSize, setTerminalScrollSpeed, setTheme, setViewMode, sidebarWidth, terminalFontSize, terminalScrollSpeed, theme, viewMode, workspace } from '../state/app.js'
 import { VscSelect } from './vsc.jsx'
 import { TField } from './Fields.jsx'
 import { UserManager } from './UserManager.jsx'
 import { AutomationsPanel } from './AutomationsPanel.jsx'
 import { SkillManager } from './SkillManager.jsx'
-import { useExtensionAgent } from './ExtensionDetail.jsx'
+
 import { ShareCard } from './ShareCard.jsx'
 import { ShareModal } from './ShareModal.jsx'
 import { ProjectSwitcher } from './ProjectSwitcher.jsx'
@@ -256,10 +256,7 @@ function RemoteView() {
 }
 
 function ExtensionsView() {
-  const { agent: rigAgent } = useExtensionAgent('openrig')
-
   return <div class="info-view"><div class="sidebar-heading"><span>{t('view.extensions')}</span><Blocks size={14} /></div><div class="extension-list"><div class="extension-card"><span class="extension-icon"><Sparkles size={16} /></span><span><strong>Harpy Agents</strong><small>{t('extensions.agentsDescription')}</small></span><span class="extension-state">{t('extensions.builtIn')}</span></div><div class="extension-card"><span class="extension-icon"><Files size={16} /></span><span><strong>CodeMirror</strong><small>{t('extensions.editorDescription')}</small></span><span class="extension-state">{t('extensions.builtIn')}</span></div><div class="extension-card"><span class="extension-icon"><TerminalIcon size={16} /></span><span><strong>xterm.js</strong><small>{t('extensions.terminalDescription')}</small></span><span class="extension-state">{t('extensions.builtIn')}</span></div>
-    <button class="extension-card extension-card-open" type="button" onClick={() => openExtension('openrig')}><span class="extension-icon"><img src="/icons/openrig.svg" width={16} height={16} alt="" /></span><span><strong>OpenRig</strong><small>{t('extensions.openrigDescription')}</small></span><span class="extension-actions">{rigAgent?.available && <span class="extension-state">{t('extensions.installed')}</span>}<span class="extension-view-pill">{t('extensions.view')}</span></span></button>
   </div></div>
 }
 

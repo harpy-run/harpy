@@ -10,6 +10,8 @@ export class OpenCodeAdapter extends Adapter {
 
   buildTerminalArgs() { return [] }
   buildResumeArgs() { return ['--continue'] }
+  // opencode run -c continues the last session headlessly.
+  buildContinueArgs({ prompt } = {}) { return ['run', ...(prompt ? [prompt] : []), '--continue'] }
   buildArgs({ prompt } = {}) { return ['run', ...(prompt ? [prompt] : [])] }
   normalizeLine(line) { return [{ type: 'message', role: 'assistant', text: line, partial: true }] }
 }

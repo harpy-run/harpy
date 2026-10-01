@@ -15,9 +15,13 @@ typecheck script — `npm run lint` is the only automated check.
 - `npm start` (a.k.a. `npm run server`) — backend only, always on the stable
   publication port `3001`. For an isolated port use `node server/cli.js start
   --port N`; host is `0.0.0.0`; serves `dist/` if it exists, otherwise 404s on `/`.
-- `harpy` (no args, TTY) — interactive dashboard: status box, daemon
-  start/stop/restart, open-in-browser, settings, update check, logs. Non-TTY
-  prints compact status.
+- `harpy` (no args, TTY) — the agent shell: a codex-style REPL that chats
+  with any installed agent CLI and manages daemon teams (`/team`, `/say`,
+  `/peek`, `/join`, `/daemon`, … — see the `server/cli-shell.js` note below).
+  `harpy chat [prompt]` is the one-shot/REPL entry, `harpy dash` opens the
+  classic status dashboard (status box, daemon start/stop/restart,
+  open-in-browser, settings, update check, logs). Non-TTY prints compact
+  status.
 - `harpy daemon install` — start the backend detached and register login
   autostart (systemd/desktop entry on Linux, LaunchAgent on macOS, Startup folder
   on Windows). On a real first run (no `~/.harpy/cli.json`, TTY, no `--port`)
@@ -56,7 +60,7 @@ backend first, then `node scripts/smoke.mjs`.
 
 - `smoke.mjs` — `BASE` defaults to `http://localhost:3001`. Performs first-run
   setup itself using `HARPY_SMOKE_PASSWORD` (default `secret123`). Asserts the
-  WS `agent.agents` reply has exactly **8** adapters — keep this in sync if you
+  WS `agent.agents` reply has exactly **7** adapters — keep this in sync if you
   add/remove an adapter in `server/agents/adapters/`.
 - `agent-terminal-smoke.mjs` — `BASE` defaults to `http://127.0.0.1:3231`
   (different port — set `BASE` or run a second server on 3231). Requires at least
@@ -116,22 +120,23 @@ backend first, then `node scripts/smoke.mjs`.
   `workspaceCwd`/`workspacePath` take `{allowOutside}` only for that path.
   WS channel `automation` (list/read = access, save/remove/toggle/runNow =
   admin); `setAutomationNotifier` broadcasts `automation.changed`.
-  `server/channels/rig.channel.js` integrates OpenRig (`rig` CLI) without
-  touching its daemon API: every op shells out to `rig ... --json`
-  (`overview`, `seats --full`, `send`, `capture`) or opens a pty terminal
-  (`attach` → `tmux attach-session`). `boot`/`down` run `rig up/down --json
-  --yes` in the background (no terminal) and return a per-seat result
-  summary; `rig up` reports failures as exit-0 JSON `{error}` — surface
-  those inline. Seat normalization whitelists fields — `rig ps --full`
-  carries `resumeToken` secrets that must never reach a socket frame. Read
-  ops ride the caller's `openrig` agent allowlist entry; control ops are
-  admin-only since seats are daemon-user processes. No server-side polling —
-  clients refresh while the RigsPanel section is expanded. `RigsPanel` is
-  the compact agent-rail strip; `FleetView` (opened via the `$fleet`
-  sentinel editor tab, `openFleet()`) is the full-area dashboard with rig
-  chips, a seat card grid, a peek/send detail pane and a user-controlled
-  poll interval (pausable); while the fleet tab is active the agent rail
-  auto-parks and restores on leave.
+  `server/cli-shell.js` is the codex-style shell that bare `harpy` opens:
+  plain text is a headless agent turn (adapter `buildArgs`/`buildContinueArgs`
+  + `normalizeLine`, so every CLI renders the same stream), and `/commands`
+  drive the daemon over a loopback WebSocket authed by
+  `$HARPY_HOME/daemon/cli.key` (an `hp_…` key the daemon mints at boot,
+  0600, removed on shutdown — same-host local capability, no password
+  prompt). "Teams" are a `team` label on daemon agent sessions (start
+  input → `sessionInfo` → persisted in `agent-sessions.json` → restored):
+  `/team up|down`, `/say` (broadcast), `/peek` (history), `/join` (raw
+  passthrough, Ctrl-] detaches), `/sessions`, `/status`, `/daemon`,
+  `/use`, `/cwd`, `/new`, `/update`, `/open`, `/set`. `harpy chat
+  [prompt] [-a agent] [--cwd dir]` is the flag-bearing entry — with a
+  prompt (or piped stdin) it is a one-shot turn, otherwise the REPL.
+  `harpy dash` keeps the old status menu. Continuations capture the
+  provider's session id (`meta` events: codex `thread.started`, claude
+  `system/init`) and resume it directly — `--last`-style fallbacks could
+  attach to an unrelated daemon session.
 - `src/` — Preact frontend. Entry `src/main.jsx` → `App.jsx`. State via
   `@preact/signals` (`src/state/`). Styling is **Tailwind v4** through
   `@tailwindcss/vite` (CSS entry `src/styles/tailwind.css`), not a tailwind config.
@@ -142,14 +147,16 @@ backend first, then `node scripts/smoke.mjs`.
 
 ## Agent adapters
 
-Eight adapters live in `server/agents/adapters/`: `claude`, `codex`, `devin`,
-`gemini`, `qwen`, `opencode`, `grok`, `openrig`. Each wraps an external CLI
+Seven adapters live in `server/agents/adapters/`: `claude`, `codex`, `devin`,
+`gemini`, `qwen`, `opencode`, `grok`. Each wraps an external CLI
 detected via a PATH scan (`server/util/env.js` builds a service-friendly PATH
 from the login shell plus well-known dirs, also used for agent/pty spawn env);
-`available` is false if the binary is missing. Only `claude`, `devin` and
-`openrig` set `interactive: true` — `openrig` is an orchestrator, not a chat
-CLI, so its session is just the `rig tui` dashboard attached to the PTY; rig
-seats run in detached tmux outside harpy's process tree and survive the tab.
+`available` is false if the binary is missing. Only `claude` and `devin` set
+`interactive: true`. `buildResumeArgs` re-spawns a daemon PTY session after a
+restart; `buildContinueArgs({prompt, sessionId})` is the shell's headless
+follow-up path — adapters that can target a conversation id (codex
+`thread.started`, claude `system/init`) should resume it directly rather than
+a global `--last`/`--continue`, which can attach to an unrelated session.
 Each adapter may also declare `static
 install` (`{ command, windows? }`) — the CLI's one-line installer, shown in
 the new-session modal so an unavailable agent can be installed in a visible
@@ -157,8 +164,8 @@ terminal. Detection results are cached in `$HARPY_HOME/agent-availability.json`
 for 24h (probing scans the login-shell/known-dir PATH, not just the service
 PATH); `agent.agents` with `{ refresh: true }` forces a re-check, the server
 re-probes hourly and broadcasts `agent.agents` when availability changes,
-and opening the new-session modal triggers a fresh check. Adding a
-9th requires updating `registerAllAdapters` **and** the `agents.length !== 8`
+and opening the new-session modal triggers a fresh check. Adding an
+8th requires updating `registerAllAdapters` **and** the `agents.length !== 7`
 assertion in `scripts/smoke.mjs`.
 
 ## Auth & config

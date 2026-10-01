@@ -21,6 +21,10 @@ export class Adapter {
   // or null when the CLI cannot resume — the runner falls back to a fresh
   // interactive spawn.
   buildResumeArgs() { return null }
+  // Headless variant for the CLI shell's follow-up turns: same one-shot call
+  // as buildArgs but continuing the CLI's own stored conversation. Null means
+  // the agent has no headless resume — the shell starts a fresh turn instead.
+  buildContinueArgs(_options) { return null }
   normalizeLine(_line, _state) { return [] }
   buildUserFrame(text) { return `${text}\n` }
 }

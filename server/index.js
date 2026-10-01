@@ -3,7 +3,7 @@ import http from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { config, VERSION } from './config.js'
-import { authMiddleware, authRoutes, loadAuth } from './auth.js'
+import { authMiddleware, authRoutes, checkApiKey, issueApiKey, loadAuth } from './auth.js'
 import { Router } from './router.js'
 import { serveStatic } from './static.js'
 import { sendJson } from './util/http.js'
@@ -25,7 +25,7 @@ import { shareResume, shareRoutes, shareSupervise } from './share.js'
 import { previewRoutes } from './preview.js'
 import { oauthRoutes } from './git-oauth.js'
 import { automationChannel } from './channels/automation.channel.js'
-import { rigChannel } from './channels/rig.channel.js'
+
 import { automationRoutes, onFsChanged, sessionEnded, setAutomationNotifier, startScheduler } from './automations.js'
 import { registerFsListener } from './channels/fs.channel.js'
 import { getPty } from './util/pty.js'
@@ -95,7 +95,6 @@ export function createHttpServer() {
   hub.register('share', shareChannel)
   hub.register('system', systemChannel)
   hub.register('automation', automationChannel)
-  hub.register('rig', rigChannel)
   // Automation engine: fs watcher flushes, the cron tick, and the runner's
   // session-end hook feed trigger → gate → spawn. All idle work is local.
   registerFsListener(onFsChanged)
@@ -124,6 +123,21 @@ export function createHttpServer() {
   return { server, router, hub }
 }
 
+// A loopback-only capability file lets the interactive `harpy` shell drive
+// daemon ops (teams, sessions, send) without asking for the password — it
+// lives at 0600 inside the 0700 data dir, so only the owning account reads
+// it. Reused across restarts; minted fresh whenever it does not verify.
+const CLI_KEY_FILE = () => path.join(config.dataDir, 'daemon', 'cli.key')
+function writeCliKey() {
+  try {
+    const file = CLI_KEY_FILE()
+    const existing = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim() : ''
+    const key = existing && checkApiKey(existing) ? existing : issueApiKey('harpy cli').key
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+    fs.writeFileSync(file, `${key}\n`, { mode: 0o600 })
+  } catch { void 0 }
+}
+
 export function startServer(options = {}) {
   const { server } = createHttpServer()
   const port = Number(options.port || config.port)
@@ -136,6 +150,7 @@ export function startServer(options = {}) {
       // Surface a broken PTY backend at boot — a missing native binary
       // otherwise only shows up as a cryptic spawn error much later.
       getPty().catch((error) => console.warn(`[pty] ${error.message}`))
+      writeCliKey()
       shareResume({ port: activePort })
       shareSupervise({ port: activePort })
     }
@@ -152,6 +167,7 @@ export function startServer(options = {}) {
   }
   listen()
   const shutdown = () => {
+    try { fs.unlinkSync(CLI_KEY_FILE()) } catch { void 0 }
     server.close(() => process.exit(0))
     // Open WebSockets keep server.close() pending forever; drop every socket
     // and cap the graceful window so service restarts stay fast.

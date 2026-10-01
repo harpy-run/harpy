@@ -19,7 +19,6 @@ import { TerminalSearchBox } from './TerminalSearch.jsx'
 import { sanitizeReplay } from '../lib/terminal-replay.js'
 import { createTerminalOutputQueue } from '../lib/terminal-output.js'
 import { TerminalAccessory } from './Terminals.jsx'
-import { RigsPanel } from './RigsPanel.jsx'
 
 const agentIcons = {
   claude: '/icons/claude-ai-icon.svg',
@@ -28,8 +27,7 @@ const agentIcons = {
   gemini: '/icons/gemini-ai-icon.svg',
   qwen: '/icons/qwen-logo.svg',
   opencode: '/icons/opencode-logo-dark.svg',
-  grok: '/icons/grok-build-icon.png',
-  openrig: '/icons/openrig.svg'
+  grok: '/icons/grok-build-icon.png'
 }
 
 // A close action must survive a browser refresh, especially when the server
@@ -858,7 +856,6 @@ export function AgentPanel({ workspacePath, paneId } = {}) {
           </div>
         })}
       </div>}
-      <RigsPanel />
       <div class="agent-console agent-terminal-console">
         {activeSession ? <div class="terminal-mobile-stage"><AgentTerminalView key={activeSession.sessionId} session={activeSession} onStatus={updateStatus} onReady={handleAgentReady} modifiersRef={agentModifiersRef} foreign={viewingForeign} paneVisible={fixed ? true : undefined} /><TerminalAccessory terminalId={activeSession.sessionId} actionsRef={agentActionsRef} modifiersRef={agentModifiersRef} /></div> : <div class="agent-empty-terminal"><TerminalIcon size={20} /><span>{t('agent.noSession')}</span><vscode-button icon="add" onClick={() => { setModalOpen(true); load(true); loadHandoffs() }}>{t('agent.new')}</vscode-button></div>}
         {activeSession?.status === 'sleeping' && <div class="agent-sleep-overlay">

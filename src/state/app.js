@@ -160,14 +160,6 @@ export function openExtension(id) {
 // was not mounted yet when the request event fired.
 export const pendingFileAction = signal(null)
 
-// The OpenRig fleet dashboard lives in the editor tab strip as a sentinel
-// tab, giving it the whole central area instead of the narrow agent rail.
-export const FLEET_TAB = '$fleet'
-
-export function openFleet() {
-  openFile(FLEET_TAB)
-}
-
 // Fullscreen CLI mode: the active agent session's terminal takes the whole
 // window with every piece of panel chrome hidden — pure CLI, Esc to leave.
 export const agentFullscreen = signal(false)

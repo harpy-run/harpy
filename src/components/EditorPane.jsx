@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { Blocks, Bot, ChevronLeft, ChevronRight, FolderOpen, FolderPlus, GitFork, Globe, Plus, Terminal as TerminalIcon, X } from '../lib/icons.jsx'
+import { Bot, ChevronLeft, ChevronRight, FolderOpen, FolderPlus, GitFork, Globe, Plus, Terminal as TerminalIcon, X } from '../lib/icons.jsx'
 import { Compartment, EditorState } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
@@ -11,10 +11,9 @@ import { unifiedMergeView } from '@codemirror/merge'
 import { ws } from '../lib/ws.js'
 import { t } from '../lib/i18n.js'
 import { useEscape } from '../lib/useEscape.js'
-import { activeFile, agentRailOpen, closeFile, EXTENSION_TAB_PREFIX, FLEET_TAB, openFleet, isAdmin, openFiles, openPreview, PREVIEW_TAB, setAgentRail, theme, workspace } from '../state/app.js'
+import { activeFile, closeFile, EXTENSION_TAB_PREFIX, isAdmin, openFiles, openPreview, PREVIEW_TAB, theme, workspace } from '../state/app.js'
 import { PreviewPane } from './PreviewPane.jsx'
 import { ExtensionDetail, extensionLabel } from './ExtensionDetail.jsx'
-import { FleetView } from './FleetView.jsx'
 
 function WelcomeView() {
   function dispatch(name) { window.dispatchEvent(new Event(name)) }
@@ -22,7 +21,7 @@ function WelcomeView() {
     <div class="welcome-hero"><img src="/logo.svg" alt="Harpy" /><div><h1>Harpy</h1><p>{t('welcome.subtitle')}</p></div></div>
     <div class="welcome-columns">
       <section class="welcome-column"><h2>{t('welcome.start')}</h2>{!isAdmin.value && <button type="button" onClick={() => dispatch('harpy:open-folder')}><FolderOpen size={15} /> {t('project.openExisting')}</button>}<button type="button" onClick={() => dispatch('harpy:create-file')}><Plus size={15} /> {t('welcome.newFile')}</button>{isAdmin.value && <><button type="button" onClick={() => dispatch('harpy:open-folder')}><FolderOpen size={15} /> {t('welcome.openFolder')}</button><button type="button" onClick={() => dispatch('harpy:clone-repo')}><GitFork size={15} /> {t('welcome.cloneRepo')}</button><button type="button" onClick={() => dispatch('harpy:new-project')}><FolderPlus size={15} /> {t('welcome.newProject')}</button></>}</section>
-      <section class="welcome-column welcome-cards"><h2>{t('welcome.tools')}</h2><button type="button" onClick={() => dispatch('harpy:open-agent')}><Bot size={15} /><span><strong>{t('welcome.agentTitle')}</strong><small>{t('welcome.agentDescription')}</small></span></button><button type="button" onClick={() => dispatch('harpy:open-terminal')}><TerminalIcon size={15} /><span><strong>{t('welcome.terminalTitle')}</strong><small>{t('welcome.terminalDescription')}</small></span></button><button type="button" onClick={openFleet}><Blocks size={15} /><span><strong>{t('welcome.fleetTitle')}</strong><small>{t('welcome.fleetDescription')}</small></span></button><button type="button" onClick={openPreview}><Globe size={15} /><span><strong>{t('preview.title')}</strong><small>{t('welcome.previewDescription')}</small></span></button></section>
+      <section class="welcome-column welcome-cards"><h2>{t('welcome.tools')}</h2><button type="button" onClick={() => dispatch('harpy:open-agent')}><Bot size={15} /><span><strong>{t('welcome.agentTitle')}</strong><small>{t('welcome.agentDescription')}</small></span></button><button type="button" onClick={() => dispatch('harpy:open-terminal')}><TerminalIcon size={15} /><span><strong>{t('welcome.terminalTitle')}</strong><small>{t('welcome.terminalDescription')}</small></span></button><button type="button" onClick={openPreview}><Globe size={15} /><span><strong>{t('preview.title')}</strong><small>{t('welcome.previewDescription')}</small></span></button></section>
     </div>
     <p class="welcome-hint">{t('welcome.hint')}</p>
   </div>
@@ -315,16 +314,7 @@ export function EditorPane() {
 
   const previewActive = active === PREVIEW_TAB
   const extensionId = active.startsWith(EXTENSION_TAB_PREFIX) ? active.slice(EXTENSION_TAB_PREFIX.length) : ''
-  const fleetActive = active === FLEET_TAB
-  // The fleet dashboard needs the whole central area — park the agent rail
-  // while its tab is active and restore it when the user moves on.
-  useEffect(() => {
-    if (!fleetActive) return undefined
-    const wasOpen = agentRailOpen.value
-    if (wasOpen) setAgentRail(false)
-    return () => { if (wasOpen) setAgentRail(true) }
-  }, [fleetActive])
-  const tabLabel = (filePath) => (filePath === PREVIEW_TAB ? t('preview.title') : filePath === FLEET_TAB ? t('fleet.title') : filePath.startsWith(EXTENSION_TAB_PREFIX) ? extensionLabel(filePath.slice(EXTENSION_TAB_PREFIX.length)) : filePath.split('/').at(-1))
+  const tabLabel = (filePath) => (filePath === PREVIEW_TAB ? t('preview.title') : filePath.startsWith(EXTENSION_TAB_PREFIX) ? extensionLabel(filePath.slice(EXTENSION_TAB_PREFIX.length)) : filePath.split('/').at(-1))
   return (
     <>
       <div class="editor-tabs-wrap">
@@ -342,7 +332,7 @@ export function EditorPane() {
               onContextMenu={(event) => { event.preventDefault(); setMenu({ path: filePath, x: Math.min(event.clientX, window.innerWidth - 210), y: Math.min(event.clientY, window.innerHeight - 190) }) }}
               title={filePath.startsWith('$') ? tabLabel(filePath) : filePath}
             >
-              <span class="editor-tab-name">{filePath === PREVIEW_TAB ? <Globe size={13} /> : filePath === FLEET_TAB ? <Bot size={13} /> : filePath.startsWith('$') ? null : (dirtyFiles[filePath] && <span class="dirty-dot" role="img" aria-label="modified">●</span>)}{tabLabel(filePath)}</span>
+              <span class="editor-tab-name">{filePath === PREVIEW_TAB ? <Globe size={13} /> : filePath.startsWith('$') ? null : (dirtyFiles[filePath] && <span class="dirty-dot" role="img" aria-label="modified">●</span>)}{tabLabel(filePath)}</span>
               <span class="close" role="button" tabIndex={0} title={t('editor.closeTab')} aria-label={t('editor.closeTab')} onClick={(event) => { event.stopPropagation(); close(filePath) }} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); close(filePath) } }}><X size={13} /></span>
             </button>
           ))}
@@ -350,11 +340,10 @@ export function EditorPane() {
         {scrollState.overflow && (
           <button type="button" class="editor-tabs-scroll" disabled={!scrollState.right} onClick={() => scrollTabs(1)} aria-label={t('editor.scrollRight')}><ChevronRight size={14} /></button>
         )}
-        <button type="button" class="editor-preview-btn" onClick={openFleet} title={t('fleet.open')} aria-label={t('fleet.open')}><Bot size={14} /></button>
         <button type="button" class="editor-preview-btn" onClick={openPreview} title={t('preview.open')} aria-label={t('preview.open')}><Globe size={14} /></button>
       </div>
-      <div class="editor-breadcrumb"><span>{previewActive ? t('preview.title') : fleetActive ? t('fleet.title') : extensionId ? t('view.extensions') : (active.split('/').slice(0, -1).join(' / ') || t('project.label'))}</span>{!previewActive && <strong>{fleetActive ? t('fleet.subtitle') : extensionId ? extensionLabel(extensionId) : active.split('/').at(-1)}</strong>}</div>
-      {previewActive ? <PreviewPane /> : fleetActive ? <FleetView /> : extensionId ? <ExtensionDetail id={extensionId} /> : <Editor key={workspaceKey + ':' + active} path={active} onDirty={(value) => setDirty(active, value)} />}
+      <div class="editor-breadcrumb"><span>{previewActive ? t('preview.title') : extensionId ? t('view.extensions') : (active.split('/').slice(0, -1).join(' / ') || t('project.label'))}</span>{!previewActive && <strong>{extensionId ? extensionLabel(extensionId) : active.split('/').at(-1)}</strong>}</div>
+      {previewActive ? <PreviewPane /> : extensionId ? <ExtensionDetail id={extensionId} /> : <Editor key={workspaceKey + ':' + active} path={active} onDirty={(value) => setDirty(active, value)} />}
       {menu && (
         <>
           <div class="tab-menu-overlay" onClick={() => setMenu(null)} onContextMenu={(event) => { event.preventDefault(); setMenu(null) }} />

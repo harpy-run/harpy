@@ -1849,49 +1849,6 @@ vscode-badge, .git-count, .git-badge, .agent-presence-count,
 
 .agent-presence-watch:disabled { cursor: default; opacity: 0.45; }
 
-/* OpenRig fleet strip — same visual family as agent-presence. */
-.agent-presence-dot.rig-attention { background: #fbbf24; box-shadow: 0 0 6px rgb(251 191 36 / 55%); }
-
-.rig-body { display: flex; flex-direction: column; gap: 4px; padding-top: 2px; }
-.rig-empty { padding: 3px 2px; color: var(--ui-muted); font: 10.5px var(--mono); }
-.rig-error { padding: 2px; font-size: 10.5px; }
-.rig-rig { display: flex; flex-direction: column; gap: 3px; }
-.rig-rig-head { display: flex; align-items: stretch; gap: 4px; }
-.rig-rig-toggle { flex: 1; }
-.rig-rig-head vscode-toolbar-button { align-self: center; }
-
-.rig-seats { display: flex; flex-direction: column; gap: 3px; padding-left: 8px; }
-.rig-seat { display: flex; flex-direction: column; gap: 3px; }
-.rig-seat-row {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 3px 7px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--r-control);
-  background: var(--ui-surface);
-  font: 11px var(--mono);
-}
-
-.rig-dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--ui-muted); }
-.rig-dot-running { background: #4ade80; box-shadow: 0 0 6px rgb(74 222 128 / 55%); }
-.rig-dot-attention { background: #fbbf24; box-shadow: 0 0 6px rgb(251 191 36 / 55%); }
-.rig-dot-idle { background: var(--ui-muted); opacity: 0.6; }
-
-.rig-seat-name { overflow: hidden; color: var(--ui-text); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.rig-seat-meta { flex: 1; overflow: hidden; color: var(--ui-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
-.rig-seat-actions { display: inline-flex; flex: none; align-items: center; }
-
-.rig-ctx { flex: none; font-size: 10px; }
-.rig-ctx-warning { color: #fbbf24; }
-.rig-ctx-critical { color: #f87171; }
-.rig-ctx-low, .rig-ctx-unknown { color: var(--ui-muted); }
-
-.rig-pending { flex: none; color: var(--ui-accent); font-size: 10px; font-weight: 600; }
-.rig-seat-error { padding: 2px 7px; color: #f87171; font: 10px var(--mono); }
-.rig-strip-head { display: flex; align-items: center; }
-.rig-strip-head .agent-presence-toggle { flex: 1; min-width: 0; }
-
 /* Fullscreen CLI mode — the active session's terminal takes the editor +
    agent area: top bar and agent mini-rail stay, sidebar / editor / bottom
    panel are parked until Esc or the corner button. */
@@ -1912,126 +1869,11 @@ vscode-badge, .git-count, .git-badge, .agent-presence-count,
 .agent-fullscreen .agent-session-tabs,
 .agent-fullscreen .agent-terminal-header,
 .agent-fullscreen .agent-broadcast,
-.agent-fullscreen .agent-presence,
-.agent-fullscreen .rig-panel { display: none; }
+.agent-fullscreen .agent-presence { display: none; }
 .agent-fullscreen .agent-console { flex: 1; min-height: 0; }
 .agent-fs-exit { position: absolute !important; top: 8px; right: 10px; z-index: 9600; opacity: .55; }
 .agent-fs-exit:hover { opacity: 1; }
 
-/* Full-area OpenRig fleet dashboard (editor tab). */
-.fleet-view { display: flex; flex-direction: column; gap: 12px; height: 100%; min-height: 0; overflow: auto; padding: 18px 22px 26px; }
-.fleet-head { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; }
-.fleet-title strong { color: var(--ui-text); display: block; font-size: 17px; }
-.fleet-title span { color: var(--ui-muted); font-size: 11px; }
-.fleet-controls { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
-.fleet-poll { width: 110px; }
-.fleet-error { font-size: 11px; }
-
-.fleet-rigs { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; }
-.fleet-chip {
-  align-items: center;
-  border: 1px solid var(--ui-border);
-  border-radius: 999px;
-  display: flex;
-  flex: none;
-  gap: 8px;
-  max-width: 100%;
-  padding: 4px 6px 4px 12px;
-  background: var(--ui-surface);
-}
-.fleet-chip.active { border-color: var(--ui-accent); background: var(--ui-accent-soft); }
-.fleet-chip-main { align-items: center; background: none; border: 0; color: var(--ui-text); cursor: pointer; display: flex; font: inherit; gap: 7px; min-width: 0; padding: 0; }
-.fleet-chip-main strong { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fleet-chip-main span { color: var(--ui-muted); font: 10px var(--mono); white-space: nowrap; }
-.fleet-boot { display: flex; flex: 1 1 300px; gap: 7px; margin-left: auto; max-width: 400px; min-width: 250px; }
-.fleet-boot vscode-textfield { flex: 1; min-width: 0; width: auto; }
-.fleet-boot-msg { flex-basis: 100%; color: var(--ui-muted); font: 10.5px var(--mono); }
-.fleet-boot-msg.ok { color: var(--ui-green); }
-.fleet-boot-msg.error { color: #f87171; }
-
-.fleet-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); }
-.fleet-seat {
-  border: 1px solid var(--ui-border);
-  border-radius: var(--r-card);
-  background: var(--ui-surface);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px;
-}
-.fleet-seat-head { align-items: baseline; display: flex; gap: 8px; min-width: 0; }
-.fleet-seat-head strong { color: var(--ui-text); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fleet-seat-head .rig-dot { align-self: center; }
-.fleet-seat-sub { color: var(--ui-muted); flex: 1; font: 10px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fleet-ctx { align-items: center; display: flex; gap: 8px; }
-.fleet-ctx-bar { background: var(--ui-raised); border-radius: 999px; flex: 1; height: 5px; overflow: hidden; }
-.fleet-ctx-fill { border-radius: 999px; display: block; height: 100%; transition: width .3s ease; }
-.fleet-ctx-fill.fleet-ctx-low { background: var(--ui-accent); }
-.fleet-ctx-fill.fleet-ctx-warning { background: #fbbf24; }
-.fleet-ctx-fill.fleet-ctx-critical { background: #f87171; }
-.fleet-ctx code { color: var(--ui-muted); font-size: 10px; }
-.fleet-stats { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; color: var(--ui-muted); font: 10.5px var(--mono); }
-.fleet-seat-actions { display: flex; flex-wrap: wrap; gap: 6px; }
-
-.fleet-detail {
-  border: 1px solid var(--ui-border);
-  border-radius: var(--r-card);
-  background: var(--ui-surface);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px;
-}
-.fleet-detail-head { align-items: center; display: flex; gap: 10px; }
-.fleet-detail-head strong { color: var(--ui-text); font: 12px var(--mono); }
-.fleet-detail-head span { color: var(--ui-muted); flex: 1; font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fleet-detail-output {
-  background: var(--ui-raised);
-  border: 1px solid var(--ui-border);
-  border-radius: var(--r-control);
-  font: 11px/1.5 var(--mono);
-  margin: 0;
-  max-height: 320px;
-  overflow: auto;
-  padding: 10px;
-  white-space: pre-wrap;
-}
-.fleet-detail-loading { display: grid; min-height: 80px; place-items: center; }
-
-.fleet-empty { color: var(--ui-muted); display: flex; flex-direction: column; gap: 10px; padding: 48px 16px; text-align: center; align-items: center; }
-.fleet-empty strong { color: var(--ui-text); font-size: 15px; }
-.fleet-empty p { font-size: 11.5px; margin: 0; max-width: 420px; }
-.fleet-empty-inline { padding: 18px; }
-
-@media (max-width: 760px) {
-  .fleet-view { padding: 12px 12px 20px; }
-  .fleet-boot { flex-basis: 100%; margin-left: 0; max-width: none; min-width: 0; }
-  .fleet-poll { width: 96px; }
-  .fleet-grid { grid-template-columns: 1fr; }
-  .fleet-detail-output { max-height: 220px; }
-}
-
-.rig-send-row { display: flex; gap: 4px; padding-left: 13px; }
-.rig-send-row input { flex: 1; }
-
-.rig-peek {
-  max-height: 160px;
-  margin: 0;
-  padding: 6px 8px;
-  overflow: auto;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--r-control);
-  background: var(--ui-bg);
-  color: var(--ui-text);
-  font: 10px/1.45 var(--mono);
-  white-space: pre-wrap;
-  word-break: break-word;
-  scrollbar-width: thin;
-  scrollbar-color: var(--ui-slider) transparent;
-}
-
-.rig-boot-row { display: flex; gap: 4px; padding-top: 4px; border-top: 1px solid var(--ui-border); }
-.rig-boot-row input { flex: 1; }
 
 .agent-presence-files {
   position: absolute;
