@@ -85,6 +85,7 @@ export function ExtensionDetail({ id }) {
     try {
       const { id: ptyId } = await ws.request('pty', 'create', { cols: 100, rows: 30, workspace: workspace.value?.path || '', command: `${agent?.install?.command || ext.installCommand}; echo "[harpy] install finished"` })
       panelOpen.value = true
+      window.dispatchEvent(new CustomEvent('harpy:pty-created', { detail: { id: ptyId, workspace: workspace.value?.path || '' } }))
       let tail = ''
       const unsubscribe = ws.on('pty', 'data', (event) => {
         if (event.id !== ptyId) return

@@ -105,7 +105,11 @@ export class BoxedInput {
     const { lines, start } = this.block(final)
     if (this.drawn) out.write('\x1b[2A') // cursor sits in the input row → back to the status row
     out.write('\r\x1b[J' + lines.join('\n') + '\n')
-    out.write(`\x1b[${lines.length - 3}A`) // back up to the input row
+    // The trailing '\n' leaves the cursor one row past the block — the input
+    // row is lines.length - 2 up, not -3. Landing one row low made every
+    // redraw restart at the top border, drifting the block down a row per
+    // keystroke and orphaning the old status row ("1 sleeping") each time.
+    out.write(`\x1b[${lines.length - 2}A`) // back up to the input row
     out.write(`\x1b[${7 + this.cur - start}G`)
     this.drawn = true
   }
@@ -144,7 +148,12 @@ export class BoxedInput {
   paintStatus(text) {
     if (!this.drawn || !this.active) return
     const cols = Math.min(process.stdout.columns || 80, 100)
-    process.stdout.write(`\x1b[s\x1b[2A\r\x1b[2K${fit(text, cols)}\x1b[u`)
+    // No \x1b[s/\x1b[u — the input row sits exactly 2 rows below the status
+    // row, and explicit math behaves the same on terminals that never
+    // implemented SCOSC/SCORC. Column is recomputed like render() does.
+    const viewW = cols - 10
+    const start = Math.max(0, this.cur - (viewW - 1))
+    process.stdout.write(`\x1b[2A\r\x1b[2K${fit(text, cols)}\r\x1b[2B\x1b[${7 + this.cur - start}G`)
   }
 
   // Print output above the block, then re-glue it — transcript stays clean.

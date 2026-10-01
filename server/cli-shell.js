@@ -311,13 +311,13 @@ function sessionCard(state, link, port) {
     info('daemon', link.ws ? `:${port} connected` : 'offline', link.ws ? '' : '/daemon start'),
     ''
   ]
-  const foot = ' / commands · tab agents · /exit quits'
+  const foot = fit(' / commands · tab agents · /exit quits', Math.max(0, width - 1))
   return [
     '',
     `  ╭${'─'.repeat(width)}╮`,
     ...right.map((cellText, i) => row(mark ? mark[i] || '' : '', cellText)),
     `  │${' '.repeat(width)}│`,
-    `  │${dim(foot)}${' '.repeat(Math.max(0, width - foot.length - 1))} │`,
+    `  │${dim(foot)}${' '.repeat(Math.max(0, width - strip(foot).length - 1))} │`,
     `  ╰${'─'.repeat(width)}╯`,
     ''
   ]
@@ -408,11 +408,23 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
 
   const t = translator(cliLang())
 
+  // The strip tracks this shell's neighborhood: sessions rooted at or under
+  // the current cwd. Bots from other workspaces stay in /sessions and the
+  // Tab overlay but do not crowd the status line — a stale "1 sleeping" from
+  // an old project read as noise stuck above every prompt.
+  const inScope = (s) => {
+    const base = String(s.workspace || s.cwd || '')
+    if (!base) return true
+    return base === state.cwd || base.startsWith(state.cwd + path.sep) || state.cwd.startsWith(base + path.sep)
+  }
+
   const statusLine = () => {
     const now = Date.now()
-    const running = daemonSessions.filter((s) => s.status === 'running')
+    const scoped = daemonSessions.filter(inScope)
+    const running = scoped.filter((s) => s.status === 'running')
     const working = running.filter((s) => now - (s.lastActivityAt || s.startedAt || 0) < 10_000)
-    const sleeping = daemonSessions.filter((s) => s.status === 'sleeping')
+    const sleeping = scoped.filter((s) => s.status === 'sleeping')
+    const elsewhere = daemonSessions.length - scoped.length
     const segs = []
     for (const s of working.slice(0, 2)) {
       segs.push(`${ok(spinChar())} ${s.sessionId} ${s.agent}${s.prompt ? ` ${dim(`— ${trunc(s.prompt, 26)}`)}` : ''}`)
@@ -420,6 +432,7 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
     const idle = running.length - working.length
     if (idle > 0) segs.push(`${ok('●')} ${idle} idle`)
     if (sleeping.length) segs.push(`${dim('○')} ${sleeping.length} sleeping`)
+    if (elsewhere) segs.push(dim(t('shElsewhere', { n: elsewhere })))
     if (!segs.length) segs.push(dim(t('shNoSessions')))
     return `  ${segs.join(dim('  ·  '))}`
   }
@@ -473,7 +486,7 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
   const tickTimer = setInterval(() => {
     spinTick++
     const now = Date.now()
-    if (daemonSessions.some((s) => s.status === 'running' && now - (s.lastActivityAt || s.startedAt || 0) < 10_000)) drawStatus()
+    if (daemonSessions.some((s) => inScope(s) && s.status === 'running' && now - (s.lastActivityAt || s.startedAt || 0) < 10_000)) drawStatus()
   }, 400)
   // First paint comes from the interval — an immediate call here would touch
   // paletteOpen/rebuilding before their `let`s initialize (TDZ).
@@ -832,8 +845,8 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
     async stop(rest) {
       if (!(await daemonUp())) return err(`daemon offline — /daemon start`)
       const ref = String(rest).trim()
-      const session = ref ? await findSession(ref) : await park(() => linkPickSession(link, 'stop which', (s) => s.status === 'running'))
-      if (!session) return ref ? err(`no session or team '${ref}'`) : print(`  ${dim('no running sessions')}`)
+      const session = ref ? await findSession(ref) : await park(() => linkPickSession(link, 'stop which', (s) => s.status === 'running' || s.status === 'sleeping'))
+      if (!session) return ref ? err(`no session or team '${ref}'`) : print(`  ${dim('no sessions')}`)
       await link.call('agent', 'stop', { sessionId: session.sessionId })
       print(`  ${ok('✓')} ${session.sessionId} stopped`)
     },

@@ -620,6 +620,23 @@ export function Terminals() {
       } else ws.request('pty', 'unwatchIds', { ids }).catch(() => {})
     }
     window.addEventListener('harpy:panel-visibility', visibilityChange)
+    // A terminal spawned outside this panel (Harpy Team CLI, an extension
+    // installer) joins the strip directly. visibilityChange only lists on
+    // open/close transitions, so without this a shell created while the panel
+    // was already open stays invisible.
+    const ptyCreated = (event) => {
+      const { id, workspace: created } = event.detail || {}
+      if (!id || !activeWorkspace) return
+      if (created && store.workspacePath && created !== store.workspacePath) return
+      if (!store.tabs.includes(id)) store.tabs = [...store.tabs, id]
+      store.active = id
+      if (workspaceKey() !== storeKey) return
+      tabsRef.current = store.tabs
+      activeRef.current = id
+      setTabs(store.tabs)
+      setActive(id)
+    }
+    window.addEventListener('harpy:pty-created', ptyCreated)
     visibilityChange()
     const reconnect = () => {
       // PTY ids remain server-owned across a transient socket reconnect. The
@@ -638,6 +655,7 @@ export function Terminals() {
       if (reconcileRef.current === reconcile) reconcileRef.current = null
       window.removeEventListener('harpy:workspace-change', workspaceChange)
       window.removeEventListener('harpy:panel-visibility', visibilityChange)
+      window.removeEventListener('harpy:pty-created', ptyCreated)
       dataUnsubscribe()
       exitUnsubscribe()
       window.removeEventListener('harpy:ws-open', reconnect)
