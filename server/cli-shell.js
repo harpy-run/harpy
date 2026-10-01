@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import readline from 'node:readline'
 import { spawn } from 'node:child_process'
-import { ask, c, canOpenBrowser, choose } from './cli-ui.js'
+import { ask, c, canOpenBrowser, choose, toggleMenu } from './cli-ui.js'
 import { readCliConfig, resolvePort, writeCliConfig } from './cli-config.js'
 import { config, VERSION } from './config.js'
 import { enhancedEnv } from './util/env.js'
@@ -210,20 +210,34 @@ async function linkTeamSessions(link, name) {
   return (await linkSessions(link)).filter((s) => s.team === name)
 }
 
+// Session picker used by /peek /join /stop /say /team rm when no id is given —
+// arrow keys over live sessions instead of memorizing s_N ids.
+async function linkPickSession(link, title, filter = () => true) {
+  const all = (await linkSessions(link)).filter(filter)
+  if (!all.length) return null
+  const value = await choose(title, all.map((s) => ({
+    value: s.sessionId,
+    label: `${s.sessionId}  ${s.agent}${s.team ? ` · ${s.team}` : ''}`,
+    hint: `${s.status} · ${fmtAge(s.startedAt)} ago`
+  })))
+  if (!value || value === 'back') return null
+  return all.find((s) => s.sessionId === value) || null
+}
+
 // Command palette entries — `args` flags commands that take arguments: the
 // palette prefills `/name ` instead of running them blindly.
 const PALETTE = [
   { name: 'agents', desc: 'list agent CLIs · /agents refresh re-probes' },
-  { name: 'memory', args: true, desc: 'persistent memory — on|off · digest on|off' },
-  { name: 'use', args: true, desc: 'switch the chat agent' },
+  { name: 'memory', desc: 'toggle persistent memory + digest' },
+  { name: 'use', desc: 'pick the chat agent' },
   { name: 'new', desc: 'fresh conversation' },
   { name: 'cwd', args: true, desc: 'working directory' },
-  { name: 'team', args: true, desc: 'bots — add · ls · rm · down' },
-  { name: 'say', args: true, desc: 'prompt a team or session' },
+  { name: 'team', desc: 'bots — menu: add · ls · rm · down' },
+  { name: 'say', desc: 'prompt a team or session' },
   { name: 'sessions', desc: 'all agent sessions' },
-  { name: 'peek', args: true, desc: 'tail a session' },
-  { name: 'join', args: true, desc: 'attach live — Ctrl-] leaves' },
-  { name: 'stop', args: true, desc: 'stop a session' },
+  { name: 'peek', desc: 'pick a session, tail its output' },
+  { name: 'join', desc: 'pick a session, attach live' },
+  { name: 'stop', desc: 'pick a session, stop it' },
   { name: 'status', desc: 'daemon & teams at a glance' },
   { name: 'daemon', args: true, desc: 'start|stop|restart|status' },
   { name: 'open', desc: 'web UI' },
@@ -360,20 +374,20 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
       print(table([
         [c.accent('chat'), ''],
         ['/agents', 'list agent CLIs — refresh re-probes'],
-        ['/memory [on|off]', 'workspace memory + auto-digest (default on)'],
-        ['/use <id>', 'switch the chat agent (claude, codex, gemini, …)'],
+        ['/memory', 'toggle memory + digest (checkbox menu; on by default)'],
+        ['/use', 'pick the chat agent — arrows, or /use <id>'],
         ['/new', 'start a fresh conversation (drops resume)'],
         ['/cwd [path]', 'show or change the working directory'],
         [c.accent('teams — bots running together in the daemon'), ''],
-        ['/team', 'guided new-bot form (name · agent · task)'],
+        ['/team', 'menu — add a bot (guided form) · list · remove · stop'],
         ['/team ls', 'list teams and their bots'],
-        ['/team rm <id>', 'remove one bot'],
-        ['/team down <name>', 'stop every bot in a team'],
-        ['/say <team|id> <text>', 'send a prompt to a team or one session'],
+        ['/team rm [id]', 'remove one bot — no id picks from the list'],
+        ['/team down [name]', 'stop every bot in a team'],
+        ['/say', 'pick a team or session, type the prompt'],
         ['/sessions', 'all agent sessions'],
-        ['/peek <id> [n]', 'read the last n lines of a session'],
-        ['/join <id>', 'attach live to a session (Ctrl-] to leave)'],
-        ['/stop <id>', 'stop one session'],
+        ['/peek [id] [n]', 'pick a session, read its last n lines'],
+        ['/join [id]', 'pick a session, attach live (Ctrl-] leaves)'],
+        ['/stop [id]', 'pick a session, stop it'],
         [c.accent('system'), ''],
         ['/status', 'daemon, agents and teams at a glance'],
         ['/daemon start|stop|restart', 'manage the background server'],
@@ -381,13 +395,14 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
         ['/update', 'self-update harpy'],
         ['/set <key> <value>', 'settings: port, workspace, agent, lang'],
         ['/settings', 'show cli settings'],
-        ['/quit', 'leave the shell']
+        ['/quit · /exit', 'leave the shell']
       ]))
     },
 
     async memory(rest) {
       if (!(await daemonUp())) return err(`daemon offline — /daemon start`)
       const arg = String(rest).trim().toLowerCase()
+      const report = (prefs) => print(`  ${dim('memory')} ${prefs.memory ? ok('on') : warn('off')} ${dim('· digest')} ${prefs.digest ? ok('on') : warn('off')}${!prefs.memory ? ` ${dim('— .harpy/ wiped from reachable workspaces')}` : ''}`)
       if (arg === 'on' || arg === 'off' || arg === 'digest on' || arg === 'digest off') {
         const [key, value] = arg.startsWith('digest') ? ['digest', arg.endsWith('on')] : ['memory', arg === 'on']
         const prefs = await link.call('agent', 'saveMemoryPrefs', { [key]: value })
@@ -397,11 +412,18 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
       }
       if (arg) return err('usage: /memory [on|off|digest on|digest off]')
       const prefs = await link.call('agent', 'memoryPrefs', {})
-      print(table([
-        ['memory', prefs.memory ? ok('on') : warn('off'), dim('.harpy/MEMORY.md + AGENTS.md pointer + launch hint + handoffs')],
-        ['digest', prefs.digest ? ok('on') : warn('off'), dim('session-end CLI run distills durable facts into MEMORY.md')],
-        ['', '', dim('/memory off turns both off and wipes .harpy/ from reachable workspaces')]
-      ]))
+      if (!process.stdin.isTTY) return report(prefs)
+      // Checkbox menu — space flips, esc settles. Nothing to memorize.
+      const items = [
+        { label: 'persistent memory', hint: '.harpy/MEMORY.md · AGENTS.md pointer · handoffs · launch hint', on: prefs.memory },
+        { label: 'memory digest', hint: 'session-end run distills durable facts into MEMORY.md', on: prefs.digest }
+      ]
+      await toggleMenu('memory', items, async (i) => {
+        const key = i === 0 ? 'memory' : 'digest'
+        const saved = await link.call('agent', 'saveMemoryPrefs', { [key]: !items[i].on })
+        return saved[key]
+      })
+      report(await link.call('agent', 'memoryPrefs', {}))
     },
 
     async agents(rest) {
@@ -421,8 +443,17 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
     },
 
     async use(rest) {
-      const id = String(rest).trim()
-      if (!id) return err('usage: /use <id>')
+      let id = String(rest).trim()
+      if (!id) {
+        // Radio list — the current agent carries the filled dot.
+        const picked = await choose('chat with', state.listed.map((a) => ({
+          value: a.id,
+          label: `${a.id === state.agent ? '●' : '○'} ${a.id}`,
+          hint: a.available ? 'installed' : dim(`missing — ${a.install?.command || 'install first'}`)
+        })), { defaultValue: state.agent })
+        if (!picked || picked === 'back') return
+        id = picked
+      }
       if (!state.adapters.has(id)) return err(`unknown agent '${id}' — /agents`)
       state.agent = id
       state.fresh = true
@@ -462,16 +493,48 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
           for (const s of members) print(`    ${sessionTag(s)} ${dim(`· ${fmtAge(s.startedAt)} ago`)}`)
         }
       }
-      // Bare /team (and /team add) opens a guided "new bot" form — no syntax
-      // to memorize, the shell asks each field like a form. `default` is the
-      // standing team name so casual users never manage namespaces.
-      if (!sub || sub === 'add') return teamWizard()
+      // Bare /team opens an action menu — add a bot (guided form), list, or
+      // remove/stop via pickers. `default` is the standing team name so casual
+      // users never manage namespaces. /team add skips the menu entirely.
+      if (sub === 'add') return teamWizard()
+      if (!sub) {
+        const all = await sessions()
+        if (!all.length) return teamWizard()
+        await teamList()
+        const action = await choose('team', [
+          { value: 'add', label: '＋ add a bot', hint: 'guided form — name · agent · task' },
+          { value: 'rm', label: '✕ remove a bot', hint: 'pick from the list' },
+          { value: 'down', label: '■ stop a team', hint: 'kills every bot in it' },
+          { value: 'ls', label: '≡ list teams', hint: '' }
+        ])
+        if (!action || action === 'back') return
+        if (action === 'add') return teamWizard()
+        if (action === 'ls') return
+        if (action === 'rm') {
+          const bot = await linkPickSession(link, 'remove which bot', (s) => Boolean(s.team))
+          if (!bot) return print(`  ${dim('no team bots — /team adds one')}`)
+          await link.call('agent', 'stop', { sessionId: bot.sessionId })
+          return print(`  ${ok('✓')} ${bot.sessionId} removed`)
+        }
+        if (action === 'down') {
+          const names = [...new Set(all.map((s) => s.team).filter(Boolean))]
+          const name = await choose('stop which team', names.map((t) => ({ value: t, label: t, hint: `${all.filter((s) => s.team === t).length} bots` })))
+          if (!name || name === 'back') return
+          const members = await teamSessions(name)
+          let stopped = 0
+          for (const s of members) {
+            if (s.status === 'stopped') continue
+            try { await link.call('agent', 'stop', { sessionId: s.sessionId }); stopped++ } catch { void 0 }
+          }
+          return print(`  ${ok('✓')} team '${name}' — ${stopped} stopped`)
+        }
+        return
+      }
       if (sub === 'ls' || sub === 'list') return teamList()
       if (sub === 'rm' || sub === 'remove') {
         const ref = parts.join(' ')
-        if (!ref) return err('usage: /team rm <sessionId>')
-        const session = await findSession(ref)
-        if (!session) return err(`no session '${ref}' — /sessions`)
+        const session = ref ? await findSession(ref) : await linkPickSession(link, 'remove which bot', (s) => Boolean(s.team))
+        if (!session) return ref ? err(`no session '${ref}' — /sessions`) : print(`  ${dim('no team bots')}`)
         await link.call('agent', 'stop', { sessionId: session.sessionId })
         print(`  ${ok('✓')} ${session.sessionId} removed`)
         return
@@ -490,8 +553,14 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
         return
       }
       if (sub === 'down') {
-        const [name] = parts
-        if (!name) return err('usage: /team down <name>')
+        let [name] = parts
+        if (!name) {
+          const all = await sessions()
+          const names = [...new Set(all.map((s) => s.team).filter(Boolean))]
+          const picked = await choose('stop which team', names.map((t) => ({ value: t, label: t, hint: `${all.filter((s) => s.team === t).length} bots` })))
+          if (!picked || picked === 'back') return
+          name = picked
+        }
         const members = await teamSessions(name)
         if (!members.length) return err(`no team '${name}'`)
         let stopped = 0
@@ -509,7 +578,32 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
       if (!(await daemonUp())) return err(`daemon offline — /daemon start`)
       const [ref, ...textParts] = String(rest).trim().split(/\s+/)
       const text = textParts.join(' ')
-      if (!ref || !text) return err('usage: /say <team|sessionId> <text>')
+      if (!ref) {
+        // Pick a target — teams broadcast, sessions get a direct message.
+        const all = await sessions()
+        if (!all.length) return print(`  ${dim('no sessions — /team adds bots')}`)
+        const teamNames = [...new Set(all.map((s) => s.team).filter(Boolean))]
+        const picked = await choose('say to', [
+          ...teamNames.map((t) => ({ value: `team:${t}`, label: `▣ ${t}`, hint: `team · ${all.filter((s) => s.team === t).length} bots` })),
+          ...all.map((s) => ({ value: s.sessionId, label: `${s.sessionId}  ${s.agent}${s.team ? ` · ${s.team}` : ''}`, hint: `${s.status} · ${fmtAge(s.startedAt)} ago` }))
+        ])
+        if (!picked || picked === 'back') return
+        const target = picked.startsWith('team:') ? picked.slice(5) : picked
+        const message = await ask('message')
+        if (!message) return
+        if (picked.startsWith('team:')) {
+          const live = all.filter((s) => s.team === target && s.status === 'running').map((s) => s.sessionId)
+          if (!live.length) return err(`team '${target}' has no running sessions`)
+          const result = await link.call('agent', 'broadcast', { sessionIds: live, text: message })
+          const okCount = (result.results || []).filter((r) => r.ok).length
+          print(`  ${ok('✓')} sent to ${okCount}/${live.length} in '${target}'`)
+        } else {
+          await link.call('agent', 'send', { sessionId: target, text: message })
+          print(`  ${ok('✓')} sent to ${target}`)
+        }
+        return
+      }
+      if (!text) return err('usage: /say <team|sessionId> <text>')
       const members = await teamSessions(ref)
       if (members.length) {
         const live = members.filter((s) => s.status === 'running').map((s) => s.sessionId)
@@ -535,8 +629,13 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
     async peek(rest) {
       if (!(await daemonUp())) return err(`daemon offline — /daemon start`)
       const [ref, count] = String(rest).trim().split(/\s+/)
-      if (!ref) return err('usage: /peek <id> [lines]')
-      const session = await findSession(ref)
+      let session
+      if (!ref) {
+        session = await linkPickSession(link, 'peek which')
+        if (!session) return print(`  ${dim('no sessions — /team adds bots')}`)
+      } else {
+        session = await findSession(ref)
+      }
       if (!session) return err(`no session or team '${ref}'`)
       const n = Math.min(Math.max(Number(count) || 30, 1), 300)
       const history = await link.call('agent', 'history', { sessionId: session.sessionId })
@@ -551,8 +650,13 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
     async join(rest) {
       if (!(await daemonUp())) return err(`daemon offline — /daemon start`)
       const ref = String(rest).trim()
-      if (!ref) return err('usage: /join <id>')
-      const session = await findSession(ref)
+      let session
+      if (!ref) {
+        session = await linkPickSession(link, 'join which', (s) => s.status === 'running')
+        if (!session) return print(`  ${dim('no running sessions — /team adds bots')}`)
+      } else {
+        session = await findSession(ref)
+      }
       if (!session) return err(`no session or team '${ref}'`)
       print(`  ${dim(`attached to ${session.sessionId} — Ctrl-] detaches, output is the live terminal`)}`)
       // Hand stdin raw to the session PTY: closing rl detaches its keypress
@@ -589,8 +693,8 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
     async stop(rest) {
       if (!(await daemonUp())) return err(`daemon offline — /daemon start`)
       const ref = String(rest).trim()
-      const session = await findSession(ref)
-      if (!session) return err(`no session or team '${ref}'`)
+      const session = ref ? await findSession(ref) : await linkPickSession(link, 'stop which', (s) => s.status === 'running')
+      if (!session) return ref ? err(`no session or team '${ref}'`) : print(`  ${dim('no running sessions')}`)
       await link.call('agent', 'stop', { sessionId: session.sessionId })
       print(`  ${ok('✓')} ${session.sessionId} stopped`)
     },

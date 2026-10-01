@@ -125,3 +125,59 @@ export async function choose(title, options, { defaultValue, footer } = {}) {
   if (picked) console.log(`  ${c.dim(`${title} —`)} ${c.accent(`› ${picked.label}`)}`)
   return value
 }
+
+// Checkbox-style menu: ↑↓ moves, space/enter flips the focused item via
+// onToggle(i, item) (async — returns the new boolean), esc/q closes. Items
+// keep their live `on` state so callers can read back what was toggled.
+export async function toggleMenu(title, items, onToggle) {
+  if (!isInteractive() || !items.length) return
+  closePrompts()
+  const stdin = process.stdin
+  const out = process.stdout
+  if (!stdin.listenerCount('keypress')) emitKeypressEvents(stdin)
+  stdin.setRawMode(true)
+  stdin.resume()
+  let index = 0
+  let rows = 0
+  let busy = false
+  let closed = false
+  const render = () => {
+    if (rows) out.write(`\x1b[${rows}A\x1b[0J`)
+    const lines = title ? [`  ${c.bold(title)}`] : []
+    for (const [i, item] of items.entries()) {
+      const mark = item.on ? c.ok('◉') : c.dim('○')
+      const text = `${item.label}${item.hint ? `  ${c.dim(item.hint)}` : ''}`
+      lines.push(i === index ? `  ${c.accent('›')} ${mark} ${c.bold(text)}` : `    ${mark} ${text}`)
+    }
+    lines.push(`  ${c.dim('↑↓ move · space toggles · esc done')}`)
+    out.write(lines.join('\n') + '\n')
+    rows = lines.length
+  }
+  render()
+  await new Promise((resolve) => {
+    const onKey = (_ch, key = {}) => {
+      if (key.name === 'escape' || key.name === 'q' || (key.ctrl && key.name === 'c')) {
+        closed = true
+        stdin.removeListener('keypress', onKey)
+        resolve()
+        return
+      }
+      if (key.name === 'up' || key.name === 'k') index = (index - 1 + items.length) % items.length
+      else if (key.name === 'down' || key.name === 'j') index = (index + 1) % items.length
+      else if (key.name === 'space' || key.name === 'return') {
+        if (busy) return
+        busy = true
+        Promise.resolve(onToggle(index, items[index]))
+          .then((next) => { items[index].on = Boolean(next) })
+          .catch(() => {})
+          .finally(() => { busy = false; if (!closed) render() })
+        return
+      } else return
+      render()
+    }
+    stdin.on('keypress', onKey)
+  })
+  stdin.setRawMode(false)
+  stdin.pause()
+  out.write(`\x1b[${rows}A\x1b[0J`) // collapse — caller prints the settled state
+}
