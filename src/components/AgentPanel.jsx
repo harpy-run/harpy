@@ -638,7 +638,9 @@ export function AgentPanel({ workspacePath, paneId } = {}) {
     setBusy(true)
     setError('')
     try {
-      await ws.request('pty', 'create', { cols: 100, rows: 30, workspace: wsPath(), command: 'harpy' })
+      // `harpy-team` jumps straight into the agent shell — no launcher.
+      // Fallback to plain `harpy` keeps older global installs working.
+      await ws.request('pty', 'create', { cols: 100, rows: 30, workspace: wsPath(), command: 'harpy-team || harpy' })
       setModalOpen(false)
       panelOpen.value = true
     } catch (requestError) {

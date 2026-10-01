@@ -130,6 +130,8 @@ const scenes = {
     [['    • JWT bearer — 24h TTL, verified on the /ws upgrade']],
     [['    • API keys   — hp_… issued via /api/auth/keys, revoked per-user']],
     [['']],
+    [['  ⠋ ', 'ok'], ['s_148 claude — review PRs', 'fg'], ['   ·   ', 'dim'], ['○', 'dim'], [' 1 sleeping', 'fg']],
+    [['  devin · ~/src/harpy', 'dim'], ['                / commands · tab agents · ^C cancel ', 'dim']],
     ...P('devin', [['/exit', 'fg']]),
     [['  bye', 'dim']],
     [['']]

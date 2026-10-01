@@ -11,6 +11,7 @@ import readline from 'node:readline'
 import { spawn } from 'node:child_process'
 import { ask, c, canOpenBrowser, choose, toggleMenu } from './cli-ui.js'
 import { readCliConfig, resolvePort, writeCliConfig } from './cli-config.js'
+import { cliLang, translator } from './cli-i18n.js'
 import { config, VERSION } from './config.js'
 import { enhancedEnv } from './util/env.js'
 
@@ -386,6 +387,8 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
   const spinChar = () => SPINNER[spinTick % SPINNER.length]
   const trunc = (s, n) => (s && s.length > n ? `${s.slice(0, n - 1)}…` : (s || ''))
 
+  const t = translator(cliLang())
+
   const statusLine = () => {
     const now = Date.now()
     const running = daemonSessions.filter((s) => s.status === 'running')
@@ -398,29 +401,42 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
     const idle = running.length - working.length
     if (idle > 0) segs.push(`${ok('●')} ${idle} idle`)
     if (sleeping.length) segs.push(`${dim('○')} ${sleeping.length} sleeping`)
-    if (!segs.length) segs.push(dim(`${state.agent || 'harpy'} · / commands · tab shows agents`))
+    if (!segs.length) segs.push(dim(t('shNoSessions')))
     return `  ${segs.join(dim('  ·  '))}`
   }
 
+  // Second reserved row — the input's context strip: who's chatting, where,
+  // and the key hints, right-aligned. Together with the agent strip above it
+  // this frames the input like a dedicated editor field.
+  const hintLine = () => {
+    const cols = process.stdout.columns || 80
+    const left = `  ${state.agent || 'harpy'} · ${trunc(state.cwd, 30)}`
+    const right = ` ${t('shHints')} `
+    const padW = Math.max(2, cols - stripAnsi(left).length - stripAnsi(right).length)
+    return `${dim(left)}${' '.repeat(padW)}${dim(right)}`
+  }
+
+  const statusBlock = () => `${statusLine()}\n${hintLine()}`
+
   const drawStatus = () => {
     if (!promptVisible || paletteOpen || rebuilding) return
-    process.stdout.write(`\x1b[s\x1b[1A\r\x1b[2K${statusLine()}\x1b[u`)
+    process.stdout.write(`\x1b[s\x1b[2A\r\x1b[2K${statusLine()}\n\x1b[2K${hintLine()}\x1b[u`)
   }
 
   const showPrompt = () => {
     if (!rl) return
-    process.stdout.write(`${statusLine()}\n`)
+    process.stdout.write(`${statusBlock()}\n`)
     promptVisible = true
     rl.prompt()
   }
 
   // Command/push output must never splice into a live input line — wipe the
   // prompt row, print, re-glue status + prompt below it so the stack is
-  // always [output…][status][input]. _refreshLine is node's own prompt+line
-  // re-render; it keeps whatever the user had typed.
+  // always [output…][status][context][input]. _refreshLine is node's own
+  // prompt+line re-render; it keeps whatever the user had typed.
   const print = (s) => {
     if (promptVisible && rl && !rebuilding && !paletteOpen) {
-      process.stdout.write(`\r\x1b[2K${s}\n${statusLine()}\n`)
+      process.stdout.write(`\r\x1b[2K${s}\n${statusBlock()}\n`)
       rl._refreshLine?.()
     } else {
       process.stdout.write(`${s}\n`)
@@ -706,7 +722,7 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
         print(`  ${c.accent(label)}`)
         for (const s of rows) {
           const purpose = s.prompt ? ` ${dim(`— ${trunc(s.prompt, 34)}`)}` : ''
-          const note = s.status === 'sleeping' ? ` ${dim('· /resume wakes')}` : ''
+          const note = s.status === 'sleeping' ? ` ${dim(`· ${t('shResumeWakes')}`)}` : ''
           print(`    ${s.sessionId.padEnd(7)} ${s.agent.padEnd(8)} ${(s.team || '—').padEnd(9)}${purpose}${note} ${dim(fmtAge(s.startedAt))}`)
         }
       }
@@ -911,7 +927,7 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
           const spinner = setInterval(() => {
             if (state.wroteOutput || !state.busy) return
             const el = Math.floor((Date.now() - startedAt) / 1000)
-            process.stdout.write(`\r\x1b[2K  ${c.accent(spinChar())} ${state.agent} ${dim(`thinking…${el ? ` ${el}s ·` : ''} ctrl-c cancels`)}`)
+            process.stdout.write(`\r\x1b[2K  ${c.accent(spinChar())} ${state.agent} ${dim(`${t('shThinking')}${el ? ` ${el}s ·` : ''} ctrl-c cancels`)}`)
           }, 120)
           try { await runAgentTurn(state, text) } catch (error) { err(error.message || String(error)) }
           clearInterval(spinner)
@@ -990,7 +1006,7 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
       out.write(lines.join('\n') + '\n')
       shown = lines.length
     }
-    out.write('\x1b[1A\r\x1b[0J') // erase the status row + the `agent › /` prompt line
+    out.write('\x1b[2A\r\x1b[0J') // erase the status+context rows + the `agent › /` prompt line
     draw()
     const picked = await new Promise((resolve) => {
       const done = (v) => { stdin.removeListener('keypress', onKey); resolve(v) }
@@ -1042,15 +1058,15 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
       const now = Date.now()
       const running = list.filter((s) => s.status === 'running').length
       const sleeping = list.filter((s) => s.status === 'sleeping').length
-      const lines = [`  ${c.bold('agents')} ${dim(`— ${running} running · ${sleeping} sleeping`)}`, '']
+      const lines = [`  ${c.bold(t('shAgents'))} ${dim(`— ${running} running · ${sleeping} sleeping`)}`, '']
       for (const [i, s] of list.entries()) {
         const working = s.status === 'running' && now - (s.lastActivityAt || s.startedAt || 0) < 10_000
         const mark = s.status === 'sleeping' ? dim('○') : working ? ok(spinChar()) : s.status === 'stopped' ? dim('◌') : ok('●')
         const row = `${mark} ${s.sessionId}  ${s.agent}${s.team ? ` · ${s.team}` : ''}  ${s.status}${s.prompt ? `  ${dim(trunc(s.prompt, 34))}` : ''}  ${dim(fmtAge(s.startedAt))}`
         lines.push(i === sel ? `  ${c.accent('›')} ${c.bold(row)}` : `    ${row}`)
       }
-      if (!list.length) lines.push(`    ${dim('no sessions yet — /team adds a bot')}`)
-      lines.push('', `  ${dim('↑↓ select · enter attach · w wake · r remove · esc back')}`)
+      if (!list.length) lines.push(`    ${dim(t('shNoSessions'))}`)
+      lines.push('', `  ${dim(t('shFleetKeys'))}`)
       out.write(lines.join('\n') + '\n')
       shown = lines.length
     }
@@ -1059,7 +1075,7 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
       if (sel >= list.length) sel = Math.max(0, list.length - 1)
       draw()
     }
-    out.write('\x1b[1A\r\x1b[0J') // erase status + prompt rows, overlay takes over
+    out.write('\x1b[2A\r\x1b[0J') // erase status + context + prompt rows, overlay takes over
     await refresh()
     const pollInt = setInterval(refresh, 2_000)
     const animInt = setInterval(() => { spinTick++; draw() }, 400)

@@ -1,6 +1,6 @@
 {
   "name": "@harpy-run/harpy",
-  "version": "2.6.19",
+  "version": "2.6.20",
   "description": "Self-hosted control plane for AI coding agents — web and mobile",
   "keywords": [
     "ai",
@@ -40,7 +40,8 @@
   },
   "preferGlobal": true,
   "bin": {
-    "harpy": "server/cli.js"
+    "harpy": "server/cli.js",
+    "harpy-team": "server/cli.js"
   },
   "files": [
     "dist",

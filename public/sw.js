@@ -1,7 +1,7 @@
 // Service Worker for Harpy PWA
 // Cache only manifest (needed for PWA install). HTML and JS are never pre-cached
 // so a rebuild + refresh always picks up the latest assets.
-const CACHE_NAME = 'harpy-v9';
+const CACHE_NAME = 'harpy-v10';
 const urlsToCache = [
   '/manifest.json',
   '/logo.png',

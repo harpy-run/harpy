@@ -119,12 +119,11 @@ async function openWebUi(port) {
 
 // --- interactive home -----------------------------------------------------
 
-async function home() {
-  const { daemonStatus, startDaemon, installAutostart, removeAutostart } = await import('./daemon.js')
-
-  // First run: the wizard owns the screen — the language question comes
-  // first and every following prompt renders in the picked language. It ends
-  // by applying autostart + the background-daemon choice and printing the URL.
+// First-run preamble shared by `harpy` (launcher) and `harpy-team` (straight
+// into the team shell): wizard on a true first run, language pick for older
+// installs that predate it.
+async function firstRunSetup() {
+  const { startDaemon, installAutostart, removeAutostart } = await import('./daemon.js')
   if (isInteractive()) {
     if (!cliConfigExists()) {
       const merged = await firstRunWizard({})
@@ -148,6 +147,11 @@ async function home() {
       if (lang) writeCliConfig({ lang })
     }
   }
+}
+
+async function home() {
+  const { daemonStatus } = await import('./daemon.js')
+  await firstRunSetup()
 
   if (!isInteractive()) {
     await printDaemonResult(await daemonStatus({ port: resolvePort() }))
@@ -656,6 +660,15 @@ async function main() {
   const command = process.argv[2]
   const args = process.argv.slice(3)
   if (!command) {
+    // `harpy-team` is the same entry point through a second bin name — it
+    // skips the mode launcher and opens the agent shell directly, the way
+    // `claude`/`codex` behave. npm maps both names to this file.
+    if (path.basename(process.argv[1] || '').startsWith('harpy-team')) {
+      await firstRunSetup()
+      const { chatShell } = await import('./cli-shell.js')
+      await chatShell({})
+      return
+    }
     await home()
     return
   }
