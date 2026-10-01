@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import readline from 'node:readline'
 import { spawn } from 'node:child_process'
-import { box, c, canOpenBrowser } from './cli-ui.js'
+import { ask, box, c, canOpenBrowser, choose } from './cli-ui.js'
 import { readCliConfig, resolvePort, writeCliConfig } from './cli-config.js'
 import { config, VERSION } from './config.js'
 import { enhancedEnv } from './util/env.js'
@@ -28,7 +28,7 @@ const warn = (s) => c.warn(s)
 // ($HARPY_HOME/daemon/cli.key, 0600). No password prompts on the host's own
 // account; when the file is missing the daemon is simply down or unconfigured.
 
-class DaemonLink {
+export class DaemonLink {
   constructor(port) {
     this.port = port
     this.ws = null
@@ -181,6 +181,25 @@ function sessionTag(s) {
   return bits.join(' · ')
 }
 
+// Session lookups shared by the interactive shell and the non-interactive
+// `harpy team` subcommands — they take the link explicitly so both callers
+// can reuse them.
+async function linkSessions(link) {
+  return (await link.call('agent', 'sessions', {})) || []
+}
+
+async function linkFindSession(link, ref) {
+  const all = await linkSessions(link)
+  return all.find((s) => s.sessionId === ref)
+    || all.find((s) => String(s.index) === String(ref).replace(/^s_/, ''))
+    || all.find((s) => s.team === ref)
+    || null
+}
+
+async function linkTeamSessions(link, name) {
+  return (await linkSessions(link)).filter((s) => s.team === name)
+}
+
 // Command palette entries — `args` flags commands that take arguments: the
 // palette prefills `/name ` instead of running them blindly.
 const PALETTE = [
@@ -188,7 +207,7 @@ const PALETTE = [
   { name: 'use', args: true, desc: 'switch the chat agent' },
   { name: 'new', desc: 'fresh conversation' },
   { name: 'cwd', args: true, desc: 'working directory' },
-  { name: 'team', args: true, desc: 'teams — up <name> <agent> · down' },
+  { name: 'team', args: true, desc: 'bots — add · ls · rm · down' },
   { name: 'say', args: true, desc: 'prompt a team or session' },
   { name: 'sessions', desc: 'all agent sessions' },
   { name: 'peek', args: true, desc: 'tail a session' },
@@ -276,21 +295,9 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
 
   const setPrompt = () => rl?.setPrompt(`${state.agent || 'harpy'} › `)
 
-  async function sessions() {
-    return (await link.call('agent', 'sessions', {})) || []
-  }
-
-  async function findSession(ref) {
-    const all = await sessions()
-    return all.find((s) => s.sessionId === ref)
-      || all.find((s) => String(s.index) === String(ref).replace(/^s_/, ''))
-      || all.find((s) => s.team === ref)
-      || null
-  }
-
-  async function teamSessions(name) {
-    return (await sessions()).filter((s) => s.team === name)
-  }
+  const sessions = () => linkSessions(link)
+  const findSession = (ref) => linkFindSession(link, ref)
+  const teamSessions = (name) => linkTeamSessions(link, name)
 
   const print = (s) => { process.stdout.write(`${s}\n`) }
   const err = (s) => print(`  ${warn('!')} ${s}`)
@@ -303,10 +310,11 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
         ['/use <id>', 'switch the chat agent (claude, codex, gemini, …)'],
         ['/new', 'start a fresh conversation (drops resume)'],
         ['/cwd [path]', 'show or change the working directory'],
-        [c.accent('teams — agents running together in the daemon'), ''],
-        ['/team', 'list teams and their sessions'],
-        ['/team up <name> <agent>', 'spawn a team member (optional prompt)'],
-        ['/team down <name>', 'stop every session in the team'],
+        [c.accent('teams — bots running together in the daemon'), ''],
+        ['/team', 'guided new-bot form (name · agent · task)'],
+        ['/team ls', 'list teams and their bots'],
+        ['/team rm <id>', 'remove one bot'],
+        ['/team down <name>', 'stop every bot in a team'],
         ['/say <team|id> <text>', 'send a prompt to a team or one session'],
         ['/sessions', 'all agent sessions'],
         ['/peek <id> [n]', 'read the last n lines of a session'],
@@ -367,7 +375,7 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
     async team(rest) {
       if (!(await daemonUp())) return err(`daemon offline — /daemon start`)
       const [sub, ...parts] = String(rest).trim().split(/\s+/)
-      if (!sub) {
+      const teamList = async () => {
         const all = await sessions()
         const teams = new Map()
         for (const s of all) {
@@ -375,11 +383,24 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
           if (!teams.has(s.team)) teams.set(s.team, [])
           teams.get(s.team).push(s)
         }
-        if (!teams.size) return print(`  ${dim('no teams yet — /team up <name> <agent>')}`)
+        if (!teams.size) return print(`  ${dim('no bots yet — /team walks you through adding one')}`)
         for (const [name, members] of teams) {
           print(`  ${c.accent(name)}`)
           for (const s of members) print(`    ${sessionTag(s)} ${dim(`· ${fmtAge(s.startedAt)} ago`)}`)
         }
+      }
+      // Bare /team (and /team add) opens a guided "new bot" form — no syntax
+      // to memorize, the shell asks each field like a form. `default` is the
+      // standing team name so casual users never manage namespaces.
+      if (!sub || sub === 'add') return teamWizard()
+      if (sub === 'ls' || sub === 'list') return teamList()
+      if (sub === 'rm' || sub === 'remove') {
+        const ref = parts.join(' ')
+        if (!ref) return err('usage: /team rm <sessionId>')
+        const session = await findSession(ref)
+        if (!session) return err(`no session '${ref}' — /sessions`)
+        await link.call('agent', 'stop', { sessionId: session.sessionId })
+        print(`  ${ok('✓')} ${session.sessionId} removed`)
         return
       }
       if (sub === 'up') {
@@ -408,7 +429,7 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
         print(`  ${ok('✓')} team '${name}' — ${stopped} stopped`)
         return
       }
-      return err('usage: /team [up <name> <agent> [prompt] | down <name>]')
+      return err('usage: /team [add | ls | up <name> <agent> [prompt] | rm <id> | down <name>]')
     },
 
     async say(rest) {
@@ -661,11 +682,18 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
       if (shown) out.write(`\x1b[${shown}A\x1b[0J`) // back to row 1, wipe block
       list = PALETTE.filter((p) => p.name.startsWith(filter))
       if (sel >= list.length) sel = Math.max(0, list.length - 1)
-      const lines = [`  ${c.accent('›')} /${filter}`]
-      for (const [i, p] of list.slice(0, 9).entries()) {
-        const row = `/${p.name}${p.args ? ' …' : ''} ${dim(p.desc)}`
-        lines.push(i === sel ? `    ${c.accent('›')} ${c.bold(row)}` : `      ${row}`)
+      // Show every entry the screen can hold — a hard 9-row crop used to hide
+      // half the commands. The window follows the selection when the list is
+      // taller than the terminal.
+      const maxRows = Math.max(5, (out.rows || 24) - 6)
+      const top = Math.min(Math.max(0, sel - maxRows + 1), Math.max(0, list.length - maxRows))
+      const lines = [`  ${c.accent('›')} /${filter}`, '']
+      for (const [row, p] of list.slice(top, top + maxRows).entries()) {
+        const i = top + row
+        const line = `/${p.name}${p.args ? ' …' : ''} ${dim(p.desc)}`
+        lines.push(i === sel ? `    ${c.accent('›')} ${c.bold(line)}` : `      ${line}`)
       }
+      if (top + maxRows < list.length) lines.push(`      ${dim(`… ${list.length - top - maxRows} more below ↓`)}`)
       if (!list.length) lines.push(`      ${dim('no match')}`)
       out.write(lines.join('\n') + '\n')
       shown = lines.length
@@ -721,6 +749,36 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
     return next
   }
 
+  // Guided "new bot" form — bare /team walks through it instead of making
+  // anyone memorize `/team up <name> <agent> [prompt]`. The shell readline
+  // is parked like openPalette does so ask()/choose() can own the terminal,
+  // then control comes back. `default` is the standing team so casual use
+  // never touches namespaces.
+  async function teamWizard() {
+    rebuilding = true
+    const old = rl
+    rl = null
+    old.close()
+    try {
+      print('')
+      const name = (await ask('team', 'default')) || 'default'
+      const installed = state.listed.filter((a) => a.available && state.adapters.has(a.id))
+      if (!installed.length) { print(`  ${warn('!')} no agent CLIs installed — /agents`); return }
+      const agentId = await choose('pick a bot agent', installed.map((a) => ({ value: a.id, label: a.label || a.id })), { defaultValue: state.agent || installed[0].id })
+      if (!agentId || agentId === 'back') { print(`  ${dim('cancelled')}`); return }
+      const task = await ask('what should this bot do? (blank = just idle)')
+      const session = await link.call('agent', 'start', { agent: agentId, team: name, prompt: task })
+      print(`  ${ok('✓')} ${sessionTag(session)}`)
+      print(`  ${dim(`/say ${name} <text> broadcasts · /peek ${session.sessionId} tails · /join ${session.sessionId} attaches · /team rm ${session.sessionId} removes`)}`)
+    } catch (e) {
+      print(`  ${warn('!')} ${e.message}`)
+    } finally {
+      rl = makeRl()
+      rl.prompt()
+      rebuilding = false
+    }
+  }
+
   rl = makeRl()
   rl.prompt()
 
@@ -739,4 +797,94 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
   await shellClosed
   print(`  ${dim('bye')}`)
   link.close()
+}
+
+// --- non-interactive `harpy team …` -----------------------------------------
+// The same ops the shell's /team commands use, as scriptable subcommands —
+// this is the surface agent CLIs drive when the user asks a bot to add or
+// remove teammates (see skills/harpy/SKILL.md, installed onto agent skill
+// paths at daemon boot).
+export async function teamCli(args, port) {
+  // Callers (humans and agent bots alike) pipe this output — a closed pipe
+  // must exit quietly, not dump an EPIPE stack.
+  process.stdout.once('error', (e) => { if (e.code === 'EPIPE') process.exit(0); throw e })
+  const print = (s) => process.stdout.write(`${s}\n`)
+  const fail = (s) => { console.error(`harpy team: ${s}`); process.exitCode = 1 }
+  const link = new DaemonLink(port)
+  try { await link.connect() } catch {
+    return fail(`daemon is not running on :${port} — start it with \`harpy daemon start\``)
+  }
+  try {
+    const [sub, ...rest] = args
+    if (!sub || sub === 'ls' || sub === 'list') {
+      const all = await linkSessions(link)
+      const teams = new Map()
+      for (const s of all) { if (s.team) { if (!teams.has(s.team)) teams.set(s.team, []); teams.get(s.team).push(s) } }
+      if (!teams.size) { print('no teams — add a bot: harpy team up default <agent> "<role>"'); return }
+      for (const [name, members] of teams) {
+        print(`${name}`)
+        for (const s of members) print(`  ${sessionTag(s)} · ${fmtAge(s.startedAt)} ago`)
+      }
+      return
+    }
+    if (sub === 'sessions') {
+      const all = await linkSessions(link)
+      if (!all.length) { print('no sessions'); return }
+      for (const s of all) print(sessionTag(s))
+      return
+    }
+    if (sub === 'up' || sub === 'add') {
+      const [name, agent, ...promptParts] = rest
+      if (!name || !agent) return fail('usage: harpy team up <team> <agent> "<prompt>"')
+      const session = await link.call('agent', 'start', { agent, team: name, prompt: promptParts.join(' ') })
+      print(`${sessionTag(session)}`)
+      return
+    }
+    if (sub === 'rm' || sub === 'remove' || sub === 'stop') {
+      const ref = rest.join(' ')
+      if (!ref) return fail('usage: harpy team rm <sessionId>')
+      const session = await linkFindSession(link, ref)
+      if (!session) return fail(`no session or team '${ref}' — see: harpy team sessions`)
+      await link.call('agent', 'stop', { sessionId: session.sessionId })
+      print(`${session.sessionId} stopped`)
+      return
+    }
+    if (sub === 'down') {
+      const name = rest.join(' ')
+      if (!name) return fail('usage: harpy team down <team>')
+      const members = await linkTeamSessions(link, name)
+      if (!members.length) return fail(`no team '${name}' — see: harpy team ls`)
+      let stopped = 0
+      for (const s of members) {
+        if (s.status === 'stopped') continue
+        try { await link.call('agent', 'stop', { sessionId: s.sessionId }); stopped++ } catch { void 0 }
+      }
+      print(`team '${name}' — ${stopped} stopped`)
+      return
+    }
+    if (sub === 'say') {
+      const [ref, ...textParts] = rest
+      const text = textParts.join(' ')
+      if (!ref || !text) return fail('usage: harpy team say <team|sessionId> "<text>"')
+      const members = await linkTeamSessions(link, ref)
+      if (members.length) {
+        const live = members.filter((s) => s.status === 'running').map((s) => s.sessionId)
+        if (!live.length) return fail(`team '${ref}' has no running sessions`)
+        const result = await link.call('agent', 'broadcast', { sessionIds: live, text })
+        const okCount = (result.results || []).filter((r) => r.ok).length
+        print(`sent to ${okCount}/${live.length} in '${ref}'`)
+        return
+      }
+      const session = await linkFindSession(link, ref)
+      if (!session) return fail(`no session or team '${ref}'`)
+      await link.call('agent', 'send', { sessionId: session.sessionId, text })
+      print(`sent to ${session.sessionId}`)
+      return
+    }
+    fail(`unknown subcommand '${sub}' — try: ls | up | say | rm | down | sessions`)
+  } catch (e) {
+    fail(e.message)
+  } finally {
+    link.close()
+  }
 }

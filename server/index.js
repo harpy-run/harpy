@@ -6,6 +6,7 @@ import { config, VERSION } from './config.js'
 import { authMiddleware, authRoutes, checkApiKey, issueApiKey, loadAuth } from './auth.js'
 import { Router } from './router.js'
 import { serveStatic } from './static.js'
+import { installAgentSkills } from './agent-skills.js'
 import { sendJson } from './util/http.js'
 import { createHub } from './ws.js'
 import { fsChannel } from './channels/fs.channel.js'
@@ -151,6 +152,7 @@ export function startServer(options = {}) {
       // otherwise only shows up as a cryptic spawn error much later.
       getPty().catch((error) => console.warn(`[pty] ${error.message}`))
       writeCliKey()
+      installAgentSkills()
       shareResume({ port: activePort })
       shareSupervise({ port: activePort })
     }

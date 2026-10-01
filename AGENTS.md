@@ -141,9 +141,16 @@ backend first, then `node scripts/smoke.mjs`.
   0600, removed on shutdown — same-host local capability, no password
   prompt). "Teams" are a `team` label on daemon agent sessions (start
   input → `sessionInfo` → persisted in `agent-sessions.json` → restored):
-  `/team up|down`, `/say` (broadcast), `/peek` (history), `/join` (raw
-  passthrough, Ctrl-] detaches), `/sessions`, `/status`, `/daemon`,
-  `/use`, `/cwd`, `/new`, `/update`, `/open`, `/set`. `harpy chat
+  `/team` opens a guided new-bot form (name · agent picker · task — `default`
+  is the standing team), `/team ls|up|rm|down` manages bots, `/say`
+  (broadcast), `/peek` (history), `/join` (raw passthrough, Ctrl-] detaches),
+  `/sessions`, `/status`, `/daemon`, `/use`, `/cwd`, `/new`, `/update`,
+  `/open`, `/set`. The same ops are scriptable as `harpy team
+  ls|up|say|rm|down|sessions` — the surface agent CLIs drive;
+  `server/agent-skills.js` installs `skills/harpy/SKILL.md` onto
+  `~/.agents/skills/harpy/` plus existing `~/.claude`/`~/.config/devin`
+  skill dirs at every daemon boot so bots learn to add/remove teammates
+  on their own. `harpy chat
   [prompt] [-a agent] [--cwd dir]` is the flag-bearing entry — with a
   prompt (or piped stdin) it is a one-shot turn, otherwise the REPL.
   `harpy dash` keeps the old status menu. Continuations capture the

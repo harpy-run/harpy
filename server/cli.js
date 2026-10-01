@@ -672,6 +672,12 @@ async function main() {
     await dashboard()
     return
   }
+  if (command === 'team' || command === 'teams') {
+    const { config } = await import('./config.js')
+    const { teamCli } = await import('./cli-shell.js')
+    await teamCli(args, resolvePort() || config.port)
+    return
+  }
   if (command === 'daemon') {
     await daemonCommand(args)
     return
