@@ -66,6 +66,20 @@ export function UpdateChecker({ detailed = false }) {
   const reloadPoll = useRef(null)
   useEscape(open && !updating, () => setOpen(false))
 
+  // A plain location.reload() can resurrect the stale bundle: the page is
+  // controlled by a service worker whose fetch() still answers from the HTTP
+  // cache. Purge Cache Storage, nudge the SW to update, then reload — the
+  // next navigation is guaranteed to revalidate index.html.
+  async function hardReload() {
+    try {
+      const keys = await caches.keys()
+      await Promise.all(keys.map((k) => caches.delete(k)))
+      const reg = await navigator.serviceWorker?.getRegistration()
+      await reg?.update()
+    } catch { /* best effort — reload anyway */ }
+    location.reload()
+  }
+
   async function check(force = false) {
     if (state.status === 'checking' && !force) return
     setState((current) => ({ ...current, status: 'checking', error: '' }))
@@ -111,13 +125,13 @@ export function UpdateChecker({ detailed = false }) {
         try {
           const res = await fetch('/api/health')
           const info = await res.json()
-          if (info?.version && info.version !== CURRENT_VERSION) { location.reload(); return }
+          if (info?.version && info.version !== CURRENT_VERSION) { hardReload(); return }
         } catch { /* daemon mid-restart — keep polling */ }
         try {
           // The updater records phases in update-state.json — the socket dies
           // mid-restart, so this only answers once the new daemon is back.
           const status = await ws.request('system', 'updateStatus', { since })
-          if (status?.phase === 'done') { location.reload(); return }
+          if (status?.phase === 'done') { hardReload(); return }
           if (status?.phase === 'failed') { fail(); return }
         } catch { /* socket still reconnecting */ }
         if (Date.now() > deadline) fail()
@@ -168,7 +182,7 @@ export function UpdateChecker({ detailed = false }) {
         {updating && <p class="update-progress"><vscode-progress-ring /> {t('update.applying')}</p>}
         {stalled && !updating && <p class="update-error">{t('update.stalled')}</p>}
         <div class="update-actions">
-          {needsReload && <vscode-button onClick={() => location.reload()}>{t('update.reloadNow')}</vscode-button>}
+          {needsReload && <vscode-button onClick={hardReload}>{t('update.reloadNow')}</vscode-button>}
           {canSelfUpdate && !updating && !needsReload && <vscode-button onClick={updateNow}>{t('update.updateNow', { mode: installMode })}</vscode-button>}
           <a class="update-release-link" href={safeReleaseUrl(release.releaseUrl)} target="_blank" rel="noopener noreferrer">{t('update.releaseNotes')}</a>
         </div>

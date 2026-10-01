@@ -1,9 +1,8 @@
 // Service Worker for Harpy PWA
 // Cache only manifest (needed for PWA install). HTML and JS are never pre-cached
 // so a rebuild + refresh always picks up the latest assets.
-const CACHE_NAME = 'harpy-v7';
+const CACHE_NAME = 'harpy-v8';
 const urlsToCache = [
-  '/',
   '/manifest.json',
   '/logo.png',
   '/icons/icon-192x192.png',
@@ -36,14 +35,17 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // Navigation requests (HTML) — always go to network, no caching
+  // Navigation requests (HTML) — always go to network. `cache: 'no-cache'`
+  // forces revalidation: a SW-side fetch() still consults the browser's HTTP
+  // cache, which could answer a stale index.html right after an update and
+  // resurrect the old bundle + stale update banner.
   if (event.request.mode === 'navigate') {
     event.respondWith(
-      fetch(event.request).catch(() => caches.match('/').then((cached) => cached ||
+      fetch(event.request, { cache: 'no-cache' }).catch(() =>
         new Response('<h1>Harpy offline</h1><p>Please check your connection.</p>', {
           headers: { 'Content-Type': 'text/html; charset=utf-8' }
         })
-      ))
+      )
     );
     return;
   }

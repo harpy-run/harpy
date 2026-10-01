@@ -5,6 +5,14 @@ serves a Preact/Vite frontend over HTTP plus one authenticated WebSocket that
 multiplexes `fs`, `git`, `pty`, `agent`, `project`, `auth`, `activity`, `share`
 channels. There is no test runner and no
 typecheck script — `npm run lint` is the only automated check.
+Static serving (`server/static.js`): hashed `/assets/*` get `immutable`
+cache headers; everything else is `no-cache` + etag so an update can never
+keep serving a stale `index.html`/`sw.js`. The service worker
+(`public/sw.js`) never caches navigations and revalidates them; the update
+modal's reload purges Cache Storage first. `prepare`
+(`scripts/ensure-dist.mjs`) rebuilds `dist/` when its embedded version
+differs from `package.json` — covers `npm i -g .`/git installs where
+`prepack` never runs, so a stale bundle can't ship.
 
 ## Commands
 

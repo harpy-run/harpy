@@ -39,11 +39,30 @@ export function serveStatic(req, res, root) {
     if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) return false
     const type = MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream'
     const stat = fs.statSync(filePath)
+    // Cache policy: hashed /assets/* are immutable (new name per build) —
+    // everything else must revalidate so a daemon update can never keep
+    // serving a stale index.html/sw.js through the browser's HTTP cache.
+    const cacheControl = pathname.startsWith('/assets/')
+      ? 'public, max-age=31536000, immutable'
+      : 'no-cache'
+    // Weak etag + mtime so `no-cache` revalidations answer 304 instead of a
+    // full re-download when the file is unchanged.
+    const etag = `W/"${stat.size}-${Math.floor(stat.mtimeMs)}"`
+    const lastModified = stat.mtime.toUTCString()
+    if (req.headers['if-none-match'] === etag ||
+        (req.headers['if-modified-since'] && Date.parse(req.headers['if-modified-since']) >= Math.floor(stat.mtimeMs / 1000) * 1000)) {
+      res.writeHead(304, { 'cache-control': cacheControl, etag, 'last-modified': lastModified })
+      res.end()
+      return true
+    }
     res.writeHead(200, {
       'content-type': type,
       'content-length': stat.size,
       'x-content-type-options': 'nosniff',
-      'x-frame-options': 'SAMEORIGIN'
+      'x-frame-options': 'SAMEORIGIN',
+      'cache-control': cacheControl,
+      etag,
+      'last-modified': lastModified
     })
     if (req.method === 'HEAD') { res.end(); return true }
     // The file can vanish between stat() and open() — an unhandled stream
