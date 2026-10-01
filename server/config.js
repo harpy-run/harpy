@@ -16,4 +16,4 @@ export const config = {
   agentIdleMs: process.env.HARPY_AGENT_IDLE_MS === undefined ? 4 * 60 * 60 * 1000 : Math.max(0, Number(process.env.HARPY_AGENT_IDLE_MS) || 0)
 }
 
-export const VERSION = "2.6.16"
+export const VERSION = "2.6.17"

@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import readline from 'node:readline'
 import { spawn } from 'node:child_process'
-import { ask, box, c, canOpenBrowser, choose } from './cli-ui.js'
+import { ask, c, canOpenBrowser, choose } from './cli-ui.js'
 import { readCliConfig, resolvePort, writeCliConfig } from './cli-config.js'
 import { config, VERSION } from './config.js'
 import { enhancedEnv } from './util/env.js'
@@ -231,8 +231,57 @@ const PALETTE = [
   { name: 'set', args: true, desc: 'cli settings' },
   { name: 'settings', desc: 'show settings' },
   { name: 'help', desc: 'all commands' },
+  { name: 'exit', desc: 'leave the shell' },
   { name: 'quit', desc: 'leave the shell' }
 ]
+
+// Codex-style session card — rounded frame, the harpy glyph (braille-
+// rasterized from public/logo.svg) on the left, label: value rows on the
+// right. Deliberately separate from cli-ui's box(): the dashboard keeps the
+// angular frame, the shell gets the agent-terminal look.
+const HARPY_MARK = [
+  '⣿⢦⣄',
+  '⡙⢦⣈⠛⢦⣄    ⣀⣀⣀⣀⣀',
+  '⢻⡗⠮⣝⡲⢬⣙⠦⣄⣠⠞⠃ ⣠⠼⢷',
+  ' ⠙⠓⠦⠭⣝⣛⠆⠈⠙⣆⢀⡾⠁',
+  '  ⠈⠉⠛⠓⢲⡄⢀⣰⠿⠋',
+  '    ⣠⡾⠿⠚⠋⠁'
+]
+const MARK_W = Math.max(...HARPY_MARK.map((l) => l.length))
+
+function sessionCard(state, link, port) {
+  // eslint-disable-next-line no-control-regex -- stripping ANSI escapes is the point
+  const strip = (s) => s.replace(/\x1b\[[0-9;]*m/g, '')
+  const width = Math.min(76, Math.max(64, MARK_W + state.cwd.length + 16))
+  const colW = width - MARK_W - 6 // right column: ' ' + cell + trailing space
+  const row = (mark, cellText) =>
+    `  │ ${c.accent(mark.padEnd(MARK_W))}  ${cellText}${' '.repeat(Math.max(0, colW + 2 - strip(cellText).length))} │`
+  const info = (label, value, hint = '') => {
+    const maxV = colW - 9 - (hint ? hint.length + 2 : 0)
+    const v = value.length > maxV ? `…${value.slice(-Math.max(1, maxV - 1))}` : value
+    return ` ${dim(label.padEnd(7))} ${label === 'cwd' ? dim(v) : v}${hint ? `  ${dim(hint)}` : ''}`
+  }
+  const title = '›_ Harpy Team'
+  const titlePad = ' '.repeat(Math.max(1, colW - title.length - `v${VERSION}`.length - 2))
+  const right = [
+    ` ${c.accent(c.bold(title))}${titlePad} ${dim(`v${VERSION}`)}`,
+    '',
+    info('agent', state.agent || 'none', '/use to switch'),
+    info('cwd', state.cwd),
+    info('daemon', link.ws ? `:${port} connected` : 'offline', link.ws ? '' : '/daemon start'),
+    ''
+  ]
+  const foot = ' / commands · /team bots · /exit quits'
+  return [
+    '',
+    `  ╭${'─'.repeat(width)}╮`,
+    ...right.map((cellText, i) => row(HARPY_MARK[i] || '', cellText)),
+    `  │${' '.repeat(width)}│`,
+    `  │${dim(foot)}${' '.repeat(Math.max(0, width - foot.length - 1))} │`,
+    `  ╰${'─'.repeat(width)}╯`,
+    ''
+  ]
+}
 
 // --- the shell --------------------------------------------------------------
 
@@ -286,14 +335,7 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
 
   if (!process.stdin.isTTY) { console.error('harpy shell needs a terminal — use `harpy chat "prompt"` for one-shot turns'); process.exitCode = 1; return }
 
-  console.log('')
-  box(`harpy ${c.accent('v' + VERSION)}`, [
-    `${c.dim('agent')}   ${state.agent ? c.ok(state.agent) : warn('none — pick one with /use')}`,
-    `${c.dim('dir')}     ${state.cwd}`,
-    `${c.dim('daemon')}  ${link.ws ? c.ok(`:${port} connected`) : warn(`offline — /daemon start`)}`,
-    `${c.dim('help')}    / opens the command palette · /team for fleets · Ctrl-C cancels a turn`
-  ])
-  console.log('')
+  for (const line of sessionCard(state, link, port)) console.log(line)
 
   // The rl instance is rebuilt after /join (raw-mode passthrough fights
   // readline's own keypress handling) — `rebuilding` keeps close from

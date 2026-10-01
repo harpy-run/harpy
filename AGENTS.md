@@ -247,3 +247,8 @@ assertion in `scripts/smoke.mjs`.
 - Frontend is Preact, not React — import from `preact`/`@preact/*`, not `react`.
 - `harpy-projects/` holds managed per-user project workspaces selected via the
   title bar; their contents are runtime data, not part of this repo's source.
+
+
+<!-- harpy:memory -->
+This workspace uses Harpy: before starting work, read `.harpy/MEMORY.md` — the project's persistent memory — and update it with durable conventions, decisions, or gotchas (never chat logs or task progress). Recent session snapshots live under `.harpy/handoffs/` (start with `INDEX.md`).
+<!-- /harpy:memory -->

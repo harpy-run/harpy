@@ -65,6 +65,17 @@ expose them.
 | --- | --- | --- |
 | <img src="docs/screenshots/cli-selection.png" alt="Choosing a coding CLI for a new agent session" width="300" /> | <img src="docs/screenshots/mobile-chat.png" alt="Agent session on a phone with touch keys" width="220" /> | <img src="docs/screenshots/remote-share.png" alt="Public link dialog with tunnel providers" width="300" /> |
 
+### Harpy Team CLI
+
+The built-in terminal shell — `harpy` in any terminal, or the **Harpy Team
+CLI** entry at the top of the new-session picker:
+
+| Agent chat | Teams | Memory |
+| --- | --- | --- |
+| <img src="docs/screenshots/cli-shell.svg" alt="Codex-style Harpy Team shell — agent prompt, inline tool trace, /exit" width="340" /> | <img src="docs/screenshots/cli-team.svg" alt="The /team wizard spawning a scoped bot, /team ls, /say" width="360" /> | <img src="docs/screenshots/cli-memory.svg" alt="/memory status, a remembered fact, /memory off" width="360" /> |
+
+Regenerate these with `node scripts/screenshots.mjs` after CLI changes.
+
 ## Core Features
 
 ### Multi-CLI agent sessions
@@ -79,6 +90,24 @@ provider's own TUI and behavior intact.
 - Presence strip shows who else is working; session tabs carry unread-output
   markers.
 - Broadcast one prompt to several running sessions at once.
+
+### Harpy Team shell
+
+`harpy` opens a codex-style agent REPL — pick a CLI and type tasks; plain text
+runs a headless turn, `/` opens a command palette:
+
+- `/team` is a wizard, not a flag soup: name (defaults to `default`), pick the
+  bot's CLI with arrow keys, describe what it should do — harpy spawns a
+  daemon-side session scoped to that role. `/team ls`, `/team rm s_N`,
+  `/team down <name>` manage the fleet.
+- `/memory` toggles the persistent `.harpy/MEMORY.md` knowledge base (on by
+  default); `/memory digest` controls the session-end distiller.
+- `/say`, `/sessions`, `/peek`, `/join` drive running bots; `/exit` leaves.
+- Bots get the same powers: `harpy team ls|up|say|rm|down` work
+  non-interactively against the local daemon, and the bundled `harpy` skill
+  is installed into `~/.agents/skills/` (plus `~/.claude/skills/` and
+  `~/.config/devin/skills/` when present) — ask your agent for "a devin bot
+  that only reviews PRs" and it knows the commands.
 
 ### Automations
 

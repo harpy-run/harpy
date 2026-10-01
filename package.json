@@ -1,6 +1,6 @@
 {
   "name": "@harpy-run/harpy",
-  "version": "2.6.16",
+  "version": "2.6.17",
   "description": "Self-hosted control plane for AI coding agents — web and mobile",
   "keywords": [
     "ai",
@@ -60,6 +60,7 @@
     "version:sync": "node scripts/sync-version.mjs",
     "check:version": "node scripts/check-version-sync.mjs",
     "version": "node scripts/sync-version.mjs",
+    "screenshots": "node scripts/screenshots.mjs",
     "preview": "vite preview",
     "lint": "eslint ."
   },
