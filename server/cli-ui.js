@@ -1,4 +1,5 @@
 import readline from 'node:readline/promises'
+import { emitKeypressEvents } from 'node:readline'
 
 // Tiny interactive layer for the CLI — standard library only so the published
 // package stays dependency-light. Every helper degrades to plain output when
@@ -69,26 +70,51 @@ export async function confirm(question, fallback = true, { note, yes = ['y', 'ye
   }
 }
 
-// Numbered pick-list; returns the chosen option's `value`, 'back', or null on
-// quit. Non-TTY callers get the default without prompting.
-export async function choose(title, options, { defaultValue } = {}) {
+// Arrow-key pick-list: ↑/↓ (or j/k) move the highlighted row, Enter returns
+// the option's `value`, Esc returns 'back', q / Ctrl+C return null. Non-TTY
+// callers get the default without prompting.
+export async function choose(title, options, { defaultValue, footer } = {}) {
   if (!isInteractive()) return defaultValue ?? options[0]?.value
-  if (title) console.log(`  ${c.bold(title)}`)
-  options.forEach((option, index) => {
-    console.log(`    ${c.accent(`${index + 1})`)} ${option.label}${option.hint ? `  ${c.dim(option.hint)}` : ''}`)
-  })
-  for (;;) {
-    let raw
-    try {
-      raw = (await prompt().question(`  ${c.dim('>')} `)).trim().toLowerCase()
-    } catch {
-      return null // stdin closed (Ctrl+D / EOF) — treat as quit
+  if (!options.length) return null
+  closePrompts() // raw mode must own stdin — an open question-rl would eat keys
+  const stdin = process.stdin
+  const out = process.stdout
+  if (!stdin.listenerCount('keypress')) emitKeypressEvents(stdin)
+  stdin.setRawMode(true)
+  stdin.resume()
+  let index = Math.max(0, options.findIndex((o) => o.value === defaultValue))
+  let rows = 0
+  const render = () => {
+    if (rows) out.write(`\x1b[${rows}A\x1b[0J`) // cursor back to row 1, wipe the block
+    const lines = title ? [`  ${c.bold(title)}`] : []
+    for (const [i, option] of options.entries()) {
+      const text = `${option.label}${option.hint ? `  ${c.dim(option.hint)}` : ''}`
+      lines.push(i === index ? `  ${c.accent('›')} ${c.bold(text)}` : `    ${text}`)
     }
-    if (!raw && defaultValue !== undefined) return defaultValue
-    if (raw === 'q' || raw === 'quit' || raw === 'exit') return null
-    if (raw === 'b' || raw === 'back') return 'back'
-    const index = Number(raw) - 1
-    if (Number.isInteger(index) && options[index]) return options[index].value
-    console.log(`  ${c.warn('pick a number from the list (or q to quit)')}`)
+    lines.push(`  ${c.dim(footer || '↑↓ move · enter select · esc back')}`)
+    out.write(lines.join('\n') + '\n')
+    rows = lines.length
   }
+  render()
+  const value = await new Promise((resolve) => {
+    const done = (v) => { stdin.removeListener('keypress', onKey); resolve(v) }
+    const onKey = (_ch, key = {}) => {
+      if (key.name === 'return') return done(options[index].value)
+      if (key.name === 'escape' || key.name === 'b') return done('back')
+      if ((key.ctrl && key.name === 'c') || key.name === 'q') return done(null)
+      if (key.name === 'up' || key.name === 'k') index = (index - 1 + options.length) % options.length
+      else if (key.name === 'down' || key.name === 'j') index = (index + 1) % options.length
+      else if (key.name === 'home') index = 0
+      else if (key.name === 'end') index = options.length - 1
+      else return
+      render()
+    }
+    stdin.on('keypress', onKey)
+  })
+  stdin.setRawMode(false)
+  stdin.pause()
+  out.write(`\x1b[${rows}A\x1b[0J`) // collapse the list → one summary line
+  const picked = options.find((o) => o.value === value)
+  console.log(`  ${c.dim(title ? `${title} —` : '')} ${picked ? c.accent(`› ${picked.label}`) : c.dim('·')}`)
+  return value
 }

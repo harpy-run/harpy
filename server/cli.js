@@ -137,11 +137,29 @@ async function home() {
     return
   }
 
-  // Bare `harpy` opens the agent shell — the codex-style REPL that chats
-  // with any installed CLI and drives daemon teams. The classic status menu
-  // stays one word away: `harpy dash`.
-  const { chatShell } = await import('./cli-shell.js')
-  await chatShell({})
+  // Bare `harpy` opens a launcher, not a bare prompt — Harpy Team is the
+  // codex-style shell, Dashboard the classic status menu, and everything
+  // loops back here so the product never strands the operator on a prompt.
+  const t = translator(cliLang())
+  for (;;) {
+    const status = await daemonStatus({ port: resolvePort() })
+    const action = await choose(t('homePick'), [
+      { value: 'team', label: 'Harpy Team', hint: t('homeTeamHint') },
+      { value: 'dash', label: t('homeDash'), hint: t('homeDashHint') },
+      { value: 'open', label: t('homeOpen'), hint: status.listening ? `localhost:${status.port}` : t('hOpenDown') }
+    ], { defaultValue: 'team' })
+    if (action === null || action === 'back') break
+    if (action === 'team') {
+      const { chatShell } = await import('./cli-shell.js')
+      await chatShell({})
+    } else if (action === 'dash') {
+      await dashboard()
+    } else if (action === 'open') {
+      if (status.listening) openBrowser(`http://localhost:${status.port}`)
+      else console.log(`  ${c.warn(t('msgNoListen'))}`)
+    }
+  }
+  closePrompts()
 }
 
 // The menu-driven dashboard kept intact as `harpy dash`.

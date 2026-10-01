@@ -173,6 +173,29 @@ function sessionTag(s) {
   return bits.join(' · ')
 }
 
+// Command palette entries — `args` flags commands that take arguments: the
+// palette prefills `/name ` instead of running them blindly.
+const PALETTE = [
+  { name: 'agents', desc: 'list installed agent CLIs' },
+  { name: 'use', args: true, desc: 'switch the chat agent' },
+  { name: 'new', desc: 'fresh conversation' },
+  { name: 'cwd', args: true, desc: 'working directory' },
+  { name: 'team', args: true, desc: 'teams — up <name> <agent> · down' },
+  { name: 'say', args: true, desc: 'prompt a team or session' },
+  { name: 'sessions', desc: 'all agent sessions' },
+  { name: 'peek', args: true, desc: 'tail a session' },
+  { name: 'join', args: true, desc: 'attach live — Ctrl-] leaves' },
+  { name: 'stop', args: true, desc: 'stop a session' },
+  { name: 'status', desc: 'daemon & teams at a glance' },
+  { name: 'daemon', args: true, desc: 'start|stop|restart|status' },
+  { name: 'open', desc: 'web UI' },
+  { name: 'update', desc: 'self-update' },
+  { name: 'set', args: true, desc: 'cli settings' },
+  { name: 'settings', desc: 'show settings' },
+  { name: 'help', desc: 'all commands' },
+  { name: 'quit', desc: 'leave the shell' }
+]
+
 // --- the shell --------------------------------------------------------------
 
 export async function chatShell({ agent, prompt, cwd } = {}) {
@@ -594,6 +617,65 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
   // Detect quit inside onLine via rl close — the drain loop then stops.
   const markQuit = () => { quitSeen = true }
 
+  // `/` on an empty prompt opens the command palette — a raw-mode overlay
+  // that filters as you type. Enter runs the pick straight away; commands
+  // that take args instead prefill the prompt (`/team ` stays editable).
+  // Esc cancels. rl is closed for the duration — same trick /join uses.
+  let paletteOpen = false
+  async function openPalette() {
+    paletteOpen = true
+    rebuilding = true
+    const old = rl
+    rl = null
+    old.close()
+    const stdin = process.stdin
+    const out = process.stdout
+    stdin.setRawMode(true)
+    stdin.resume()
+    let filter = ''
+    let sel = 0
+    let shown = 0
+    let list = []
+    const draw = () => {
+      if (shown) out.write(`\x1b[${shown}A\x1b[0J`) // back to row 1, wipe block
+      list = PALETTE.filter((p) => p.name.startsWith(filter))
+      if (sel >= list.length) sel = Math.max(0, list.length - 1)
+      const lines = [`  ${c.accent('›')} /${filter}`]
+      for (const [i, p] of list.slice(0, 9).entries()) {
+        const row = `/${p.name}${p.args ? ' …' : ''} ${dim(p.desc)}`
+        lines.push(i === sel ? `    ${c.accent('›')} ${c.bold(row)}` : `      ${row}`)
+      }
+      if (!list.length) lines.push(`      ${dim('no match')}`)
+      out.write(lines.join('\n') + '\n')
+      shown = lines.length
+    }
+    out.write('\r\x1b[0J') // erase the `agent › /` prompt line
+    draw()
+    const picked = await new Promise((resolve) => {
+      const done = (v) => { stdin.removeListener('keypress', onKey); resolve(v) }
+      const onKey = (ch, key = {}) => {
+        if (key.name === 'return') return done(list[sel] || null)
+        if (key.name === 'escape' || (key.ctrl && key.name === 'c')) return done(null)
+        if (key.name === 'up') sel = Math.max(0, sel - 1)
+        else if (key.name === 'down') sel = Math.min(Math.max(0, list.length - 1), sel + 1)
+        else if (key.name === 'backspace') { filter = filter.slice(0, -1); sel = 0 }
+        else if (ch && ch.length === 1 && /[a-z0-9_-]/i.test(ch) && !key.ctrl && !key.meta) { filter += ch; sel = 0 }
+        else return
+        draw()
+      }
+      stdin.on('keypress', onKey)
+    })
+    stdin.setRawMode(false)
+    out.write(`\x1b[${shown}A\x1b[0J`) // erase the palette block
+    rl = makeRl()
+    rl.prompt()
+    rebuilding = false
+    paletteOpen = false
+    if (!picked) return
+    if (picked.args) rl.write(`/${picked.name} `)
+    else enqueue(`/${picked.name}`)
+  }
+
   const onSigint = () => {
     if (state.child) {
       state.cancelled = true
@@ -620,6 +702,18 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
 
   rl = makeRl()
   rl.prompt()
+
+  // '/' on an empty prompt opens the command palette. Punctuation arrives
+  // with an undefined key.name — the character itself is the match. The
+  // listener lives on stdin so it survives rl rebuilds after /join, and
+  // setImmediate lets rl consume the keystroke first regardless of the
+  // listener order a rebuilt rl leaves behind.
+  process.stdin.on('keypress', (ch, key = {}) => {
+    if (ch !== '/' || key.ctrl || key.meta) return
+    setImmediate(() => {
+      if (rl && !paletteOpen && !draining && rl.line === '/') void openPalette()
+    })
+  })
 
   await shellClosed
   print(`  ${dim('bye')}`)

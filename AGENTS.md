@@ -15,13 +15,14 @@ typecheck script — `npm run lint` is the only automated check.
 - `npm start` (a.k.a. `npm run server`) — backend only, always on the stable
   publication port `3001`. For an isolated port use `node server/cli.js start
   --port N`; host is `0.0.0.0`; serves `dist/` if it exists, otherwise 404s on `/`.
-- `harpy` (no args, TTY) — the agent shell: a codex-style REPL that chats
-  with any installed agent CLI and manages daemon teams (`/team`, `/say`,
-  `/peek`, `/join`, `/daemon`, … — see the `server/cli-shell.js` note below).
-  `harpy chat [prompt]` is the one-shot/REPL entry, `harpy dash` opens the
-  classic status dashboard (status box, daemon start/stop/restart,
-  open-in-browser, settings, update check, logs). Non-TTY prints compact
-  status.
+- `harpy` (no args, TTY) — opens the arrow-key launcher picker (`Harpy Team`
+  → the codex-style agent shell, `Dashboard` → the classic status menu,
+  `open web UI`; Esc exits). The shell chats with any installed agent CLI and
+  manages daemon teams (`/team`, `/say`, `/peek`, `/join`, `/daemon`, …); `/`
+  on an empty prompt opens the filtered command palette. `harpy chat [prompt]`
+  skips the launcher (one-shot/REPL), `harpy dash` jumps to the dashboard.
+  All pickers are cursor/highlight lists — `server/cli-ui.js`'s `choose()`
+  owns raw-mode keys; non-TTY always falls back to plain status output.
 - `harpy daemon install` — start the backend detached and register login
   autostart (systemd/desktop entry on Linux, LaunchAgent on macOS, Startup folder
   on Windows). On a real first run (no `~/.harpy/cli.json`, TTY, no `--port`)
@@ -120,7 +121,8 @@ backend first, then `node scripts/smoke.mjs`.
   `workspaceCwd`/`workspacePath` take `{allowOutside}` only for that path.
   WS channel `automation` (list/read = access, save/remove/toggle/runNow =
   admin); `setAutomationNotifier` broadcasts `automation.changed`.
-  `server/cli-shell.js` is the codex-style shell that bare `harpy` opens:
+  `server/cli-shell.js` is the codex-style shell behind `Harpy Team`
+  (the launcher's first pick) and `harpy chat`:
   plain text is a headless agent turn (adapter `buildArgs`/`buildContinueArgs`
   + `normalizeLine`, so every CLI renders the same stream), and `/commands`
   drive the daemon over a loopback WebSocket authed by
