@@ -207,8 +207,37 @@ function updateSessionFlowControl(session) {
   }
 }
 
+// node-pty's onData fires once per read — a full-screen redraw is dozens of
+// tiny chunks a second. Forwarding each one floods the socket with small
+// frames and trips flow control on high-latency links, so data coalesces
+// per ~16ms tick (one frame per screen refresh). emit() flushes pending
+// data before any lifecycle event so ordering never inverts.
+const DATA_FLUSH_MS = 16
+
+function queueSessionData(session, chunk) {
+  session.dataBuf = (session.dataBuf || '') + chunk
+  if (session.dataTimer) return
+  session.dataTimer = setTimeout(() => {
+    session.dataTimer = null
+    const data = session.dataBuf
+    session.dataBuf = ''
+    if (data) emit(session, { type: 'data', data })
+  }, DATA_FLUSH_MS)
+  session.dataTimer.unref?.()
+}
+
+function flushSessionData(session) {
+  if (!session.dataTimer) return
+  clearTimeout(session.dataTimer)
+  session.dataTimer = null
+  const data = session.dataBuf || ''
+  session.dataBuf = ''
+  if (data) emit(session, { type: 'data', data })
+}
+
 function emit(session, event) {
   if (session.closed) return
+  if (event.type !== 'data') flushSessionData(session)
   if (event.type === 'data') session.lastActivityAt = Date.now()
   const data = { ...event, sessionId: session.sessionId, agent: session.state.agent, workspace: session.workspace, startedAt: session.startedAt, index: session.index, owner: session.owner, seq: ++session.sequence, ts: Date.now() }
   session.history.push(data)
@@ -249,7 +278,7 @@ async function spawnTerm(session, args) {
     env: await enhancedEnv({ TERM: 'xterm-256color', COLORTERM: 'truecolor', HARPY_HOME: config.dataDir, ...(cliEnvFor(session.owner) || {}), ...(AdapterClass.builtin ? { HARPY_HOME: config.dataDir } : {}) })
   })
   session.term = term
-  term.onData((data) => emit(session, { type: 'data', data }))
+  term.onData((data) => queueSessionData(session, data))
   term.onExit((exit) => handleExit(session, exit))
 }
 
@@ -312,6 +341,7 @@ function markSessionStopped(session) {
 }
 
 function handleExit(session, { exitCode, signal }) {
+  flushSessionData(session)
   clearInterval(session.flowTimer)
   session.flowTimer = null
   session.flowPaused = false
@@ -536,6 +566,8 @@ export async function startRunner(ctx, { agent, prompt = '', cwd, workspace, col
     startedAt: Date.now(),
     index,
     size: dimensions(cols, rows),
+    dataBuf: '',
+    dataTimer: null,
     autoRestarted: false,
     resumedAt: 0,
     lastActivityAt: Date.now(),

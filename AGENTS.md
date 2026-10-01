@@ -5,6 +5,11 @@ serves a Preact/Vite frontend over HTTP plus one authenticated WebSocket that
 multiplexes `fs`, `git`, `pty`, `agent`, `project`, `auth`, `activity`, `share`
 channels. There is no test runner and no
 typecheck script — `npm run lint` is the only automated check.
+WS hygiene: `pty`/`agent` terminal data coalesces per ~16ms tick before
+sending (one frame per screen refresh, replay ordering preserved — never
+forward raw onData chunks), and the hub heartbeat treats any inbound frame
+as liveness (pong timeout 30s) so loaded or high-latency links are not
+killed prematurely.
 Static serving (`server/static.js`): hashed `/assets/*` get `immutable`
 cache headers; everything else is `no-cache` + etag so an update can never
 keep serving a stale `index.html`/`sw.js`. The service worker
@@ -232,7 +237,16 @@ assertion in `scripts/smoke.mjs`.
   which `App.jsx` listens for to drop back to `AuthGate`. Reconnects use
   capped exponential backoff (~1s→15s + jitter); `ws.close()` is re-armable —
   `connect()` clears the flag so the "server unavailable → retry" path can
-  reopen the socket.
+  reopen the socket. Half-open tunnels (edge drops that keep TCP "open" but
+  blackhole frames) are detected client-side: `ws.js` sends an app-level
+  `{ch:'sys', op:'ping'}` every 15s (the hub answers it before channel
+  routing — browsers can't emit protocol pings) and force-closes the socket
+  after ~30s of total inbound silence, letting backoff rebuild it; views
+  re-hydrate on `harpy:ws-open`. Server-side, the hub pings every 30s with
+  a 30s pong budget, terminates peers whose `bufferedAmount` exceeds 4 MiB,
+  and negotiates `perMessageDeflate` (>1 KiB frames) so terminal bursts
+  cross the tunnel compressed. Both `pty` and `agent` session output is
+  coalesced ~16ms per chunk before framing.
 - Per-user CLI environment: `cli-env.json` (0600) maps each `sub` to
   `{env: {KEY: value}, home: bool}`. `cliEnvFor(sub)` merges those vars over
   the daemon env at every spawn (`agent` runner + `pty` channel) — a user with

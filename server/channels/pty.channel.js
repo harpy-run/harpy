@@ -12,6 +12,38 @@ const MAX_HISTORY_EVENTS = 2_000
 const MAX_HISTORY_BYTES = 2 * 1024 * 1024
 const WS_HIGH_WATER_BYTES = 2 * 1024 * 1024
 const WS_LOW_WATER_BYTES = 512 * 1024
+// node-pty's onData fires once per read — a big redraw is dozens of tiny
+// chunks a second, and forwarding each as its own WS frame floods the
+// socket (worst-case pattern for high-latency tunnels: bufferedAmount
+// balloons, flow control trips, the tunnel drops the connection). Coalesce
+// per ~16ms tick instead: one frame per screen refresh, replay-ordered.
+const DATA_FLUSH_MS = 16
+
+function queueShellData(shell, data) {
+  shell.pendingData += data
+  if (shell.dataTimer) return
+  shell.dataTimer = setTimeout(() => flushShellData(shell), DATA_FLUSH_MS)
+  shell.dataTimer.unref?.()
+}
+
+function flushShellData(shell) {
+  if (shell.dataTimer) { clearTimeout(shell.dataTimer); shell.dataTimer = null }
+  const data = shell.pendingData
+  if (!data) return
+  shell.pendingData = ''
+  const event = { data, seq: ++shell.sequence }
+  shell.history.push(event)
+  shell.historyBytes += Buffer.byteLength(data)
+  while (shell.history.length > MAX_HISTORY_EVENTS || shell.historyBytes > MAX_HISTORY_BYTES) shell.historyBytes -= Buffer.byteLength(shell.history.shift()?.data || '')
+  for (const subscriber of shell.subscribers) {
+    // Drop revoked accounts mid-stream instead of streaming them output.
+    if (!accessAlive(subscriber)) { shell.subscribers.delete(subscriber); continue }
+    try {
+      subscriber.emit('pty', 'data', { id: shell.id, data, seq: event.seq })
+    } catch { shell.subscribers.delete(subscriber) }
+  }
+  updateFlowControl(shell)
+}
 
 function updateFlowControl(shell) {
   const subscribers = [...shell.subscribers].filter((subscriber) => subscriber.ws?.readyState === 1)
@@ -73,24 +105,14 @@ export const ptyChannel = {
         cwd: workspaceCwd(workspacePath, cwd, ctx),
         env: await enhancedEnv({ TERM: 'xterm-256color', ...(cliEnvFor(ownerKey(ctx)) || {}) })
       })
-      const shell = { term, owner: ownerKey(ctx), subscribers: new Set([ctx]), workspace: workspacePath, history: [], historyBytes: 0, sequence: 0, flowPaused: false, flowTimer: null }
+      const shell = { id, term, owner: ownerKey(ctx), subscribers: new Set([ctx]), workspace: workspacePath, history: [], historyBytes: 0, sequence: 0, flowPaused: false, flowTimer: null, pendingData: '', dataTimer: null }
       shells.set(id, shell)
       recordActivity(workspacePath, 'pty', { action: 'open', user: ctx?.principal?.username || '' })
-      term.onData((data) => {
-        const event = { data, seq: ++shell.sequence }
-        shell.history.push(event)
-        shell.historyBytes += Buffer.byteLength(data)
-        while (shell.history.length > MAX_HISTORY_EVENTS || shell.historyBytes > MAX_HISTORY_BYTES) shell.historyBytes -= Buffer.byteLength(shell.history.shift()?.data || '')
-        for (const subscriber of shell.subscribers) {
-          // Drop revoked accounts mid-stream instead of streaming them output.
-          if (!accessAlive(subscriber)) { shell.subscribers.delete(subscriber); continue }
-          try {
-            subscriber.emit('pty', 'data', { id, data, seq: event.seq })
-          } catch { shell.subscribers.delete(subscriber) }
-        }
-        updateFlowControl(shell)
-      })
+      term.onData((data) => queueShellData(shell, data))
       term.onExit(({ exitCode }) => {
+        // Flush the tail before the exit frame so the last output lands
+        // ahead of the lifecycle event on every subscriber.
+        flushShellData(shell)
         shells.delete(id)
         clearInterval(shell.flowTimer)
         recordActivity(shell.workspace, 'pty', { action: 'exit', exitCode, user: ctx?.principal?.username || '' })
@@ -183,6 +205,7 @@ export const ptyChannel = {
     kill(ctx, { id } = {}) {
       const shell = getOwnedShell(ctx, id)
       try { shell.term.kill() } catch { void 0 }
+      flushShellData(shell)
       clearInterval(shell.flowTimer)
       shell.subscribers.clear()
       shells.delete(id)
@@ -197,6 +220,7 @@ export const ptyChannel = {
         if (shell.workspace !== requested) continue
         // Notify before clearing so other clients drop the tab instantly
         // instead of waiting for their next reconcile.
+        flushShellData(shell)
         for (const subscriber of shell.subscribers) {
           try { subscriber.emit('pty', 'exit', { id, exitCode: null }) } catch { void 0 }
         }

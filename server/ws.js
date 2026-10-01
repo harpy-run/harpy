@@ -4,22 +4,35 @@ import { verifyToken, checkApiKey, resolvePrincipal } from './auth.js'
 // Reverse proxies and tunnels kill idle WebSockets after ~60s, and an
 // aborted mid-frame read surfaces in the client as "invalid frame header".
 // A periodic ping keeps the connection alive; a missed pong means the peer
-// is silently gone, so the socket is terminated and removed.
+// is silently gone, so the socket is terminated and removed. The pong
+// budget is generous (30s) — a loaded event loop or a slow tunnel delays
+// protocol frames without meaning the client is dead, and any inbound
+// frame (message or pong) also marks the socket alive.
 const PING_INTERVAL_MS = 30_000
-const PONG_TIMEOUT_MS = 10_000
+const PONG_TIMEOUT_MS = 30_000
+// A stalled peer (dead tunnel edge, suspended laptop) stops draining its
+// socket — anything we queue sits in bufferedAmount and grows unbounded.
+// Well past any legitimate burst, a peer this far behind is already dead.
+const MAX_BUFFERED_BYTES = 4 * 1024 * 1024
 
 export function createHub(server) {
   const channels = new Map()
   const connections = new Set()
   // The editor accepts files up to 5 MiB, so saves must fit inside one frame.
   // 8 MiB leaves headroom while still stopping the 100 MiB default's abuse.
-  const wss = new WebSocketServer({ noServer: true, maxPayload: 8 * 1024 * 1024 })
+  // perMessageDeflate matters through tunnels: terminal streams are mostly
+  // repeats (spaces, ANSI runs) and deflate cuts the wire bytes ~5-10x.
+  const wss = new WebSocketServer({
+    noServer: true,
+    maxPayload: 8 * 1024 * 1024,
+    perMessageDeflate: { threshold: 1024 }
+  })
   // ws auto-selects the first offered subprotocol ('harpy' is our marker);
   // the credential slot that follows it is never echoed back.
 
   const heartbeat = setInterval(() => {
     for (const ws of connections) {
-      if (ws.isAlive === false) { ws.terminate(); continue }
+      if (ws.isAlive === false || ws.bufferedAmount > MAX_BUFFERED_BYTES) { ws.terminate(); continue }
       ws.isAlive = false
       ws.ping()
       ws.pongTimer = setTimeout(() => { if (ws.isAlive === false) ws.terminate() }, PONG_TIMEOUT_MS)
@@ -79,9 +92,16 @@ export function createHub(server) {
         try { channel.onOpen?.(context) } catch { void 0 }
       }
       ws.on('message', async (raw) => {
+        // Any inbound frame proves the peer is alive — a client busy typing
+        // must not be terminated just because its pong raced the timer.
+        ws.isAlive = true
+        clearTimeout(ws.pongTimer)
         let frame
         try { frame = JSON.parse(raw.toString()) } catch { return }
         if (!frame || typeof frame !== 'object' || typeof frame.ch !== 'string') return
+        // App-level ping — browsers can't emit protocol pings, so client
+        // liveness probes ride this op and short-circuit before routing.
+        if (frame.op === 'ping') { context.send({ ch: frame.ch, id: frame.id, ok: true, data: { t: Date.now() } }); return }
         const channel = channels.get(frame.ch)
         if (!channel) { context.send({ ch: frame.ch, id: frame.id, ok: false, error: 'unknown channel' }); return }
         const operation = channel.ops?.[frame.op]

@@ -37,6 +37,16 @@ function tokenExpired() {
   }
 }
 
+// Browser WebSockets cannot emit protocol-level pings, so a silently
+// half-open path (tunnel edge drop, suspended network) leaves the socket
+// "open" while nothing ever arrives — the classic "connected but dead"
+// state. The client sends an app-level ping every HEARTBEAT_MS; any
+// inbound frame refreshes lastRx, and when nothing has been seen for
+// DEAD_AFTER_MS the socket is closed so onclose runs the normal
+// reconnect path. Worst-case detection: DEAD_AFTER + one interval.
+const HEARTBEAT_MS = 15_000
+const DEAD_AFTER_MS = 30_000
+
 export class MultiplexWS {
   constructor() {
     this.socket = null
@@ -93,6 +103,12 @@ export class MultiplexWS {
     socket.wasOpen = false
     socket.onopen = () => {
       socket.wasOpen = true
+      socket.lastRx = Date.now()
+      socket.hbTimer = setInterval(() => {
+        if (socket !== this.socket || socket.readyState !== WebSocket.OPEN) return
+        if (Date.now() - socket.lastRx > DEAD_AFTER_MS) { socket.close(); return }
+        socket.send(JSON.stringify({ ch: 'sys', id: `hb${++this.counter}`, op: 'ping' }))
+      }, HEARTBEAT_MS)
       this.attempts = 0
       for (const frame of this.queue.splice(0)) socket.send(frame)
       // Let mounted views re-attach long-lived sessions and re-fit terminals
@@ -100,6 +116,7 @@ export class MultiplexWS {
       window.dispatchEvent(new Event('harpy:ws-open'))
     }
     this.socket.onmessage = (event) => {
+      socket.lastRx = Date.now()
       let frame
       try { frame = JSON.parse(event.data) } catch { return }
       if (frame.id && this.pending.has(frame.id)) {
@@ -125,6 +142,7 @@ export class MultiplexWS {
       }
     }
     socket.onclose = () => {
+      clearInterval(socket.hbTimer)
       if (this.socket === socket) this.socket = null
       // A request attached to a socket that has already closed can never be
       // answered. Reject it so hydration/loading guards are released and the
