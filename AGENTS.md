@@ -94,7 +94,10 @@ backend first, then `node scripts/smoke.mjs`.
   appends to `$HARPY_HOME/share.log`, and `shareResume()` +
   `shareSupervise()` (dead pid → respawn, repeated `/api/health` probe
   failures → restart) keep the tunnel alive across daemon restarts and edge
-  drops. bore.dk auth is headless-friendly: `share.boreLogin` shadows
+  drops. The public-URL probe also compares the upstream `version` against
+  this daemon's `VERSION` — a tunnel that answers as a *different* harpy is
+  pointing at a stale/foreign server and gets re-spawned. bore.dk auth is
+  headless-friendly: `share.boreLogin` shadows
   `xdg-open` with a shim to capture the auth URL, rewrites its
   `127.0.0.1:port/callback` to the caller's origin, and the public
   `GET /api/share/bore/callback` route (auth:false) proxies the redirect back

@@ -62,6 +62,7 @@ export function UpdateChecker({ detailed = false }) {
   const [installMode, setInstallMode] = useState('')
   const [updating, setUpdating] = useState(false)
   const [stalled, setStalled] = useState(false)
+  const [runningVersion, setRunningVersion] = useState(null)
   const reloadPoll = useRef(null)
   useEscape(open && !updating, () => setOpen(false))
 
@@ -72,6 +73,11 @@ export function UpdateChecker({ detailed = false }) {
       const release = await checkForUpdate()
       setState({ status: release.updateAvailable ? 'available' : 'current', release, error: '' })
       if (release.updateAvailable) setOpen(true)
+      // The banner compares the *bundle* version to the release — the daemon
+      // may already run it (stale UI served by a cached bundle or another
+      // server). Health tells the truth so the modal can offer a reload
+      // instead of a pointless update.
+      fetch('/api/health').then((r) => r.json()).then((h) => h?.version && setRunningVersion(h.version)).catch(() => {})
     } catch (error) {
       setState({ status: 'error', release: null, error: error?.message || 'update check failed' })
     }
@@ -133,6 +139,8 @@ export function UpdateChecker({ detailed = false }) {
         ? t('update.current', { version: release?.currentVersion || '' })
         : t('update.check')
   const canSelfUpdate = isAdmin.value && (installMode === 'npm' || installMode === 'git')
+  // Backend already runs the released version — only this bundle is stale.
+  const needsReload = Boolean(release?.updateAvailable && runningVersion && runningVersion === release.version)
 
   return <div class={'update-checker ' + (detailed ? 'update-checker-detailed' : 'update-checker-compact')}>
     <button
@@ -154,11 +162,14 @@ export function UpdateChecker({ detailed = false }) {
         <vscode-toolbar-button class="update-modal-close" icon="close" onClick={() => !updating && setOpen(false)} title={t('update.dismiss')} aria-label={t('update.dismiss')}></vscode-toolbar-button>
         <span class="update-eyebrow">{t('update.eyebrow')}</span>
         <h2 id="harpy-update-title">{t('update.available', { version: release.version })}</h2>
+        {runningVersion && <small>{t('update.running', { version: runningVersion })}</small>}
         <ReleaseNotes notes={release.notes} />
+        {needsReload && <p class="update-progress">{t('update.reloadHint')}</p>}
         {updating && <p class="update-progress"><vscode-progress-ring /> {t('update.applying')}</p>}
         {stalled && !updating && <p class="update-error">{t('update.stalled')}</p>}
         <div class="update-actions">
-          {canSelfUpdate && !updating && <vscode-button onClick={updateNow}>{t('update.updateNow', { mode: installMode })}</vscode-button>}
+          {needsReload && <vscode-button onClick={() => location.reload()}>{t('update.reloadNow')}</vscode-button>}
+          {canSelfUpdate && !updating && !needsReload && <vscode-button onClick={updateNow}>{t('update.updateNow', { mode: installMode })}</vscode-button>}
           <a class="update-release-link" href={safeReleaseUrl(release.releaseUrl)} target="_blank" rel="noopener noreferrer">{t('update.releaseNotes')}</a>
         </div>
         <small>{t('update.serverHint', { mode: installMode || 'npm' })}</small>

@@ -122,6 +122,6 @@ export async function choose(title, options, { defaultValue, footer } = {}) {
   stdin.pause()
   out.write(`\x1b[${rows}A\x1b[0J`) // collapse the list → one summary line
   const picked = options.find((o) => o.value === value)
-  console.log(`  ${c.dim(title ? `${title} —` : '')} ${picked ? c.accent(`› ${picked.label}`) : c.dim('·')}`)
+  if (picked) console.log(`  ${c.dim(`${title} —`)} ${c.accent(`› ${picked.label}`)}`)
   return value
 }

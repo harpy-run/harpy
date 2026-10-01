@@ -72,7 +72,7 @@ function parseDaemonArgs(args) {
   return options
 }
 
-function printDaemonResult(result, json = false) {
+async function printDaemonResult(result, json = false) {
   if (json) {
     console.log(JSON.stringify(result, null, 2))
     return
@@ -80,6 +80,9 @@ function printDaemonResult(result, json = false) {
   if (result.message) console.log(result.message)
   if (result.pid) console.log(`pid: ${result.pid}`)
   if (result.port) console.log(`port: ${result.port}`)
+  if (result.listening && result.port) console.log(`local: http://localhost:${result.port}`)
+  const share = (await import('./share.js')).shareStatus()
+  if (share.url) console.log(`public: ${share.url} (${share.provider})`)
   if (result.logFile) console.log(`log: ${result.logFile}`)
   if (result.service) console.log(`autostart: ${result.service.enabled ? `enabled (${result.service.mode})` : 'disabled'}`)
 }
@@ -147,7 +150,7 @@ async function home() {
   }
 
   if (!isInteractive()) {
-    printDaemonResult(await daemonStatus({ port: resolvePort() }))
+    await printDaemonResult(await daemonStatus({ port: resolvePort() }))
     return
   }
 
@@ -404,7 +407,7 @@ async function installFlow(options) {
   const result = { ...started, service, message }
   if (options.json) printDaemonResult(result, true)
   else {
-    printDaemonResult(result)
+    await printDaemonResult(result)
     if (started.listening) console.log(`\n  ${c.cyan(`→ http://localhost:${port}`)} ${c.dim(t('linkNote'))}`)
   }
   return result
@@ -610,16 +613,16 @@ async function daemonCommand(args) {
       console.log(`${c.warn(`port ${port} is held by another app`)} — pick another: ${c.cyan(`harpy daemon start --port ${port + 1}`)}`)
       return
     }
-    printDaemonResult(result, options.json)
+    await printDaemonResult(result, options.json)
     return
   }
   if (command === 'stop') {
-    printDaemonResult(await stopDaemon(), options.json)
+    await printDaemonResult(await stopDaemon(), options.json)
     return
   }
   if (command === 'restart') {
     await stopDaemon()
-    printDaemonResult(await startDaemon({ port, workspace: options.workspace }), options.json)
+    await printDaemonResult(await startDaemon({ port, workspace: options.workspace }), options.json)
     return
   }
   if (command === 'install' || command === 'enable') {
@@ -631,11 +634,11 @@ async function daemonCommand(args) {
   if (command === 'uninstall' || command === 'disable') {
     const service = removeAutostart()
     const stopped = await stopDaemon()
-    printDaemonResult({ ...stopped, service, message: 'autostart disabled and daemon stopped' }, options.json)
+    await printDaemonResult({ ...stopped, service, message: 'autostart disabled and daemon stopped' }, options.json)
     return
   }
   if (command === 'status') {
-    printDaemonResult(await daemonStatus({ port }), options.json)
+    await printDaemonResult(await daemonStatus({ port }), options.json)
     return
   }
   if (command === 'logs') {

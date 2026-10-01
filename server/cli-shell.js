@@ -253,7 +253,7 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
     `${c.dim('agent')}   ${state.agent ? c.ok(state.agent) : warn('none — pick one with /use')}`,
     `${c.dim('dir')}     ${state.cwd}`,
     `${c.dim('daemon')}  ${link.ws ? c.ok(`:${port} connected`) : warn(`offline — /daemon start`)}`,
-    `${c.dim('help')}    /help for commands · /team for fleets · Ctrl-C cancels a turn`
+    `${c.dim('help')}    / opens the command palette · /team for fleets · Ctrl-C cancels a turn`
   ])
   console.log('')
 

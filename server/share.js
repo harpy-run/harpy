@@ -12,7 +12,7 @@ import http from 'node:http';
 import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
-import { config } from './config.js';
+import { config, VERSION } from './config.js';
 
 
 const log = (msg) => console.log(`[share] ${msg}`);
@@ -459,7 +459,16 @@ export function shareProbe() {
         }, (res) => {
             let body = '';
             res.on('data', (d) => { body += d; if (body.length > 4096) req.destroy(); });
-            res.on('end', () => resolve({ healthy: res.statusCode === 200 && body.includes('"harpy"'), http: res.statusCode }));
+            res.on('end', () => {
+                let version = null;
+                try { version = JSON.parse(body)?.version ?? null; } catch { /* not json */ }
+                // A public URL answering with a *different* harpy version
+                // means the tunnel points at a stale/foreign server (the
+                // :3199 incident) — unhealthy, so supervise re-spawns it
+                // against this daemon's port.
+                const healthy = res.statusCode === 200 && body.includes('"harpy"') && version === VERSION;
+                resolve({ healthy, http: res.statusCode, version });
+            });
         });
         req.on('timeout', () => { req.destroy(); resolve({ healthy: false, reason: 'timeout' }); });
         req.on('error', (e) => resolve({ healthy: false, reason: e.code || e.message }));
