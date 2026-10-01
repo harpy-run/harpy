@@ -320,6 +320,7 @@ export async function shareEnable(provider, opts = {}, { port = config.port } = 
         url = resolved.url || out.match(spec.urlRe)?.[0] || null;
         pid = resolved.pid || null;
         if (!url) throw new Error(`${provider} did not report a public URL`);
+        sweepStrayProviderDaemons(provider, pid);
     } else {
         const child = spawn(spec.cmd, spec.args, { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
         child.stdout?.pipe(fs.createWriteStream(tunnelLog(), { flags: 'a' }));
@@ -389,6 +390,26 @@ function livePid(st) {
     return null;
 }
 
+/**
+ * Singleton-daemon providers (bore) can end up with TWO daemon processes: a
+ * supervisor respawn races an orphaned `bore daemon`, both register the same
+ * account/namespace on the edge, and the edge splits incoming connections
+ * between a live backend and a dead one — the "connects, then blackholes"
+ * flap. Once the live pid is known, every other `bore daemon` is a stray.
+ */
+function sweepStrayProviderDaemons(provider, keepPid) {
+    if (provider !== 'bore' || !keepPid || process.platform === 'win32') return;
+    let out = '';
+    try { out = execFileSync('pgrep', ['-f', 'bore daemon'], { encoding: 'utf8' }); }
+    catch { return; }
+    for (const line of out.split('\n')) {
+        const pid = Number(line.trim());
+        if (!pid || pid === keepPid || pid === process.pid) continue;
+        try { process.kill(pid, 'SIGTERM'); log(`killed stray ${provider} daemon pid ${pid}`); }
+        catch { /* not ours to kill — ignore */ }
+    }
+}
+
 async function shareDisableInternal() {
     const st = readState();
     if (!st) return;
@@ -410,7 +431,13 @@ export async function shareDisable() {
 export async function shareResume({ port = config.port } = {}) {
     const st = readState();
     if (!st?.enabled) return;
-    if (pidAlive(st.pid)) { log(`share already running (pid ${st.pid})`); return; }
+    if (pidAlive(st.pid)) {
+        log(`share already running (pid ${st.pid})`);
+        // A stray provider daemon can fight ours even when ours is healthy —
+        // bore's edge then flaps connections between the two registrations.
+        sweepStrayProviderDaemons(st.provider, livePid(st));
+        return;
+    }
     try {
         await shareEnable(st.provider, readFullOpts(), { port });
     } catch (e) { log(`share resume failed: ${e.message}`); }
@@ -430,12 +457,14 @@ export function shareSupervise({ port = config.port } = {}) {
     superviseTimer = setInterval(async () => {
         const st = readState();
         if (!st?.enabled) { unhealthyStreak = 0; return; }
-        if (!livePid(st)) {
+        const pid = livePid(st);
+        if (!pid) {
             log('tunnel process died — respawning');
             try { await shareEnable(st.provider, readFullOpts(), { port }); } catch (e) { log(`respawn failed: ${e.message}`); }
             unhealthyStreak = 0;
             return;
         }
+        sweepStrayProviderDaemons(st.provider, pid);
         if (++tick % 3 !== 0 || !st.url) return; // probe every ~2 min
         const healthy = await shareProbe().catch(() => ({ healthy: false }));
         if (healthy.healthy) { unhealthyStreak = 0; return; }

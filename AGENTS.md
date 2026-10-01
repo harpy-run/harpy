@@ -110,7 +110,11 @@ backend first, then `node scripts/smoke.mjs`.
   appends to `$HARPY_HOME/share.log`, and `shareResume()` +
   `shareSupervise()` (dead pid → respawn, repeated `/api/health` probe
   failures → restart) keep the tunnel alive across daemon restarts and edge
-  drops. The public-URL probe also compares the upstream `version` against
+  drops. For singleton-daemon providers (bore), `shareEnable`/`shareResume`/
+  `shareSupervise` all run `sweepStrayProviderDaemons` — a spawn race or
+  orphaned `bore daemon` would otherwise double-register the same namespace
+  and the edge flaps connections between a live and a dead backend. The
+  public-URL probe also compares the upstream `version` against
   this daemon's `VERSION` — a tunnel that answers as a *different* harpy is
   pointing at a stale/foreign server and gets re-spawned. bore.dk auth is
   headless-friendly: `share.boreLogin` shadows
