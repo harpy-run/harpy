@@ -113,7 +113,12 @@ async function runAgentTurn(state, text) {
     let tail = ''
     let stderr = ''
     let wroteSinceBreak = false
-    const write = (chunk) => { process.stdout.write(chunk); wroteSinceBreak = true }
+    // First real output kills the "thinking…" spinner row the caller draws.
+    const write = (chunk) => {
+      if (!state.wroteOutput) { state.wroteOutput = true; process.stdout.write('\r\x1b[2K') }
+      process.stdout.write(chunk)
+      wroteSinceBreak = true
+    }
     child.stdout.on('data', (chunk) => {
       tail += chunk.toString('utf8')
       let nl
@@ -218,7 +223,7 @@ async function linkPickSession(link, title, filter = () => true) {
   const value = await choose(title, all.map((s) => ({
     value: s.sessionId,
     label: `${s.sessionId}  ${s.agent}${s.team ? ` · ${s.team}` : ''}`,
-    hint: `${s.status} · ${fmtAge(s.startedAt)} ago`
+    hint: `${s.status} · ${fmtAge(s.startedAt)} ago${s.prompt ? ` · ${s.prompt.slice(0, 36)}` : ''}`
   })))
   if (!value || value === 'back') return null
   return all.find((s) => s.sessionId === value) || null
@@ -237,6 +242,7 @@ const PALETTE = [
   { name: 'sessions', desc: 'all agent sessions' },
   { name: 'peek', desc: 'pick a session, tail its output' },
   { name: 'join', desc: 'pick a session, attach live' },
+  { name: 'resume', desc: 'wake a sleeping session, attach' },
   { name: 'stop', desc: 'pick a session, stop it' },
   { name: 'status', desc: 'daemon & teams at a glance' },
   { name: 'daemon', args: true, desc: 'start|stop|restart|status' },
@@ -285,7 +291,7 @@ function sessionCard(state, link, port) {
     info('daemon', link.ws ? `:${port} connected` : 'offline', link.ws ? '' : '/daemon start'),
     ''
   ]
-  const foot = ' / commands · /team bots · /exit quits'
+  const foot = ' / commands · tab agents · /exit quits'
   return [
     '',
     `  ╭${'─'.repeat(width)}╮`,
@@ -366,8 +372,71 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
   const findSession = (ref) => linkFindSession(link, ref)
   const teamSessions = (name) => linkTeamSessions(link, name)
 
-  const print = (s) => { process.stdout.write(`${s}\n`) }
+  // --- live statusline + prompt framing ------------------------------------
+  // One reserved row sits directly above the input line: daemon sessions are
+  // polled every ~2.5s and the row is rewritten in place (cursor save → up →
+  // clear → restore). Working sessions get animated spinner dots, idle ones a
+  // solid dot, sleeping a hollow one — the fleet is always visible in-context,
+  // like claude code's task strip. `promptVisible` guards every in-place
+  // write so nothing lands mid-typed-input while a command runs.
+  const SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+  let spinTick = 0
+  let promptVisible = false
+  let daemonSessions = []
+  const spinChar = () => SPINNER[spinTick % SPINNER.length]
+  const trunc = (s, n) => (s && s.length > n ? `${s.slice(0, n - 1)}…` : (s || ''))
+
+  const statusLine = () => {
+    const now = Date.now()
+    const running = daemonSessions.filter((s) => s.status === 'running')
+    const working = running.filter((s) => now - (s.lastActivityAt || s.startedAt || 0) < 10_000)
+    const sleeping = daemonSessions.filter((s) => s.status === 'sleeping')
+    const segs = []
+    for (const s of working.slice(0, 2)) {
+      segs.push(`${ok(spinChar())} ${s.sessionId} ${s.agent}${s.prompt ? ` ${dim(`— ${trunc(s.prompt, 26)}`)}` : ''}`)
+    }
+    const idle = running.length - working.length
+    if (idle > 0) segs.push(`${ok('●')} ${idle} idle`)
+    if (sleeping.length) segs.push(`${dim('○')} ${sleeping.length} sleeping`)
+    if (!segs.length) segs.push(dim(`${state.agent || 'harpy'} · / commands · tab shows agents`))
+    return `  ${segs.join(dim('  ·  '))}`
+  }
+
+  const drawStatus = () => {
+    if (!promptVisible || paletteOpen || rebuilding) return
+    process.stdout.write(`\x1b[s\x1b[1A\r\x1b[2K${statusLine()}\x1b[u`)
+  }
+
+  const showPrompt = () => {
+    if (!rl) return
+    process.stdout.write(`${statusLine()}\n`)
+    promptVisible = true
+    rl.prompt()
+  }
+
+  // Command/push output must never splice into a live input line — wipe the
+  // prompt row, print, re-glue status + prompt below it so the stack is
+  // always [output…][status][input]. _refreshLine is node's own prompt+line
+  // re-render; it keeps whatever the user had typed.
+  const print = (s) => {
+    if (promptVisible && rl && !rebuilding && !paletteOpen) {
+      process.stdout.write(`\r\x1b[2K${s}\n${statusLine()}\n`)
+      rl._refreshLine?.()
+    } else {
+      process.stdout.write(`${s}\n`)
+    }
+  }
   const err = (s) => print(`  ${warn('!')} ${s}`)
+
+  const pollSessions = async () => {
+    if (!link.ws || rebuilding || paletteOpen) return
+    try { daemonSessions = await linkSessions(link); drawStatus() } catch { void 0 }
+  }
+  const pollTimer = setInterval(pollSessions, 2_500)
+  const tickTimer = setInterval(() => { spinTick++; drawStatus() }, 400)
+  // First paint comes from the interval — an immediate call here would touch
+  // paletteOpen/rebuilding before their `let`s initialize (TDZ).
+  const firstPoll = setTimeout(pollSessions, 600)
 
   const commands = {
     async help() {
@@ -384,9 +453,10 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
         ['/team rm [id]', 'remove one bot — no id picks from the list'],
         ['/team down [name]', 'stop every bot in a team'],
         ['/say', 'pick a team or session, type the prompt'],
-        ['/sessions', 'all agent sessions'],
+        ['/sessions', 'fleet grouped by working · idle · sleeping'],
         ['/peek [id] [n]', 'pick a session, read its last n lines'],
         ['/join [id]', 'pick a session, attach live (Ctrl-] leaves)'],
+        ['/resume [id]', 'wake a sleeping session and attach'],
         ['/stop [id]', 'pick a session, stop it'],
         [c.accent('system'), ''],
         ['/status', 'daemon, agents and teams at a glance'],
@@ -622,8 +692,36 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
     async sessions() {
       if (!(await daemonUp())) return err(`daemon offline — /daemon start`)
       const all = await sessions()
-      if (!all.length) return print(`  ${dim('no agent sessions — /team up <name> <agent>')}`)
-      print(table(all.map((s) => [s.sessionId, s.agent, s.team || '—', s.status, s.pid || '—', dim(fmtAge(s.startedAt) + ' ago')])))
+      if (!all.length) return print(`  ${dim('no agent sessions — /team adds a bot')}`)
+      const now = Date.now()
+      const groups = [
+        ['working', (s) => s.status === 'running' && now - (s.lastActivityAt || s.startedAt || 0) < 10_000],
+        ['idle', (s) => s.status === 'running' && now - (s.lastActivityAt || s.startedAt || 0) >= 10_000],
+        ['sleeping', (s) => s.status === 'sleeping'],
+        ['stopped', (s) => s.status === 'stopped']
+      ]
+      for (const [label, match] of groups) {
+        const rows = all.filter(match)
+        if (!rows.length) continue
+        print(`  ${c.accent(label)}`)
+        for (const s of rows) {
+          const purpose = s.prompt ? ` ${dim(`— ${trunc(s.prompt, 34)}`)}` : ''
+          const note = s.status === 'sleeping' ? ` ${dim('· /resume wakes')}` : ''
+          print(`    ${s.sessionId.padEnd(7)} ${s.agent.padEnd(8)} ${(s.team || '—').padEnd(9)}${purpose}${note} ${dim(fmtAge(s.startedAt))}`)
+        }
+      }
+    },
+
+    async resume(rest) {
+      if (!(await daemonUp())) return err(`daemon offline — /daemon start`)
+      const ref = String(rest).trim()
+      const session = ref ? await findSession(ref) : await linkPickSession(link, 'resume which', (s) => s.status === 'sleeping')
+      if (!session) return print(`  ${dim(ref ? `no session '${ref}'` : 'no sessions')}`)
+      if (session.status === 'sleeping') {
+        try { await link.call('agent', 'wake', { sessionId: session.sessionId }); print(`  ${ok('✓')} woke ${session.sessionId}`) }
+        catch (e) { return err(e.message) }
+      }
+      return commands.join(session.sessionId)
     },
 
     async peek(rest) {
@@ -685,7 +783,7 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
       try { await link.call('agent', 'unwatch', { sessionId: session.sessionId }) } catch { void 0 }
       print(`\n  ${dim('detached — session keeps running in the daemon')}`)
       rl = makeRl()
-      rl.prompt()
+      showPrompt()
       rebuilding = false
       rebuiltThisTurn = true
     },
@@ -764,7 +862,7 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
         await daemonUp()
       } catch (error) { err(error.message) }
       rl.resume()
-      rl.prompt()
+      showPrompt()
     },
 
     async settings() {
@@ -788,8 +886,12 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
   commands.quit = () => 'quit'
 
   const onLine = async (line) => {
-    const text = line.trim()
-    if (!text) { rl?.prompt(); return }
+    // Strip stray control bytes a lone ESC/Tab may leave in the buffer —
+    // otherwise "\x1b/exit" reaches the agent instead of the command router.
+    // eslint-disable-next-line no-control-regex
+    const text = line.replace(/^[\x00-\x1f\x7f]+/, '').trim()
+    promptVisible = false // Enter consumed the row — status/prompt re-glue at the end
+    if (!text) { showPrompt(); return }
     try {
       if (text.startsWith('/')) {
         const [name, ...rest] = text.slice(1).split(/\s+/)
@@ -801,7 +903,19 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
         else {
           state.busy = true
           state.cancelled = false
+          // "thinking…" spinner — a one-line braille indicator that rewrites
+          // itself in place until the agent's first output arrives (write()
+          // above erases the row), devin/claude-code style.
+          state.wroteOutput = false
+          const startedAt = Date.now()
+          const spinner = setInterval(() => {
+            if (state.wroteOutput || !state.busy) return
+            const el = Math.floor((Date.now() - startedAt) / 1000)
+            process.stdout.write(`\r\x1b[2K  ${c.accent(spinChar())} ${state.agent} ${dim(`thinking…${el ? ` ${el}s ·` : ''} ctrl-c cancels`)}`)
+          }, 120)
           try { await runAgentTurn(state, text) } catch (error) { err(error.message || String(error)) }
+          clearInterval(spinner)
+          process.stdout.write('\r\x1b[2K')
           state.busy = false
         }
       }
@@ -810,7 +924,7 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
     }
     // /join rebuilt rl mid-command — it already prompted.
     if (rebuiltThisTurn) { rebuiltThisTurn = false; return }
-    try { rl?.prompt() } catch { void 0 }
+    try { showPrompt() } catch { void 0 }
   }
 
   // readline emits 'line' synchronously for buffered (piped) input — a
@@ -844,6 +958,7 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
   async function openPalette() {
     paletteOpen = true
     rebuilding = true
+    promptVisible = false
     const old = rl
     rl = null
     old.close()
@@ -875,7 +990,7 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
       out.write(lines.join('\n') + '\n')
       shown = lines.length
     }
-    out.write('\r\x1b[0J') // erase the `agent › /` prompt line
+    out.write('\x1b[1A\r\x1b[0J') // erase the status row + the `agent › /` prompt line
     draw()
     const picked = await new Promise((resolve) => {
       const done = (v) => { stdin.removeListener('keypress', onKey); resolve(v) }
@@ -894,12 +1009,92 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
     stdin.setRawMode(false)
     out.write(`\x1b[${shown}A\x1b[0J`) // erase the palette block
     rl = makeRl()
-    rl.prompt()
+    showPrompt()
     rebuilding = false
     paletteOpen = false
     if (!picked) return
     if (picked.args) rl.write(`/${picked.name} `)
     else enqueue(`/${picked.name}`)
+  }
+
+  // Tab on an empty prompt — claude-code-style fleet overlay. A live, raw-mode
+  // table of every agent session: animated dot on working sessions, solid on
+  // idle, hollow on sleeping, each with its purpose. Enter attaches (waking a
+  // sleeper first), w wakes in place, r removes, esc backs out. The overlay
+  // redraws on a poll so states move without touching the transcript.
+  let fleetOpen = false
+  async function openFleet() {
+    fleetOpen = true
+    rebuilding = true
+    promptVisible = false
+    const old = rl
+    rl = null
+    old.close()
+    const stdin = process.stdin
+    const out = process.stdout
+    stdin.setRawMode(true)
+    stdin.resume()
+    let list = []
+    let sel = 0
+    let shown = 0
+    const draw = () => {
+      if (shown) out.write(`\x1b[${shown}A\x1b[0J`)
+      const now = Date.now()
+      const running = list.filter((s) => s.status === 'running').length
+      const sleeping = list.filter((s) => s.status === 'sleeping').length
+      const lines = [`  ${c.bold('agents')} ${dim(`— ${running} running · ${sleeping} sleeping`)}`, '']
+      for (const [i, s] of list.entries()) {
+        const working = s.status === 'running' && now - (s.lastActivityAt || s.startedAt || 0) < 10_000
+        const mark = s.status === 'sleeping' ? dim('○') : working ? ok(spinChar()) : s.status === 'stopped' ? dim('◌') : ok('●')
+        const row = `${mark} ${s.sessionId}  ${s.agent}${s.team ? ` · ${s.team}` : ''}  ${s.status}${s.prompt ? `  ${dim(trunc(s.prompt, 34))}` : ''}  ${dim(fmtAge(s.startedAt))}`
+        lines.push(i === sel ? `  ${c.accent('›')} ${c.bold(row)}` : `    ${row}`)
+      }
+      if (!list.length) lines.push(`    ${dim('no sessions yet — /team adds a bot')}`)
+      lines.push('', `  ${dim('↑↓ select · enter attach · w wake · r remove · esc back')}`)
+      out.write(lines.join('\n') + '\n')
+      shown = lines.length
+    }
+    const refresh = async () => {
+      try { list = await linkSessions(link); daemonSessions = list } catch { void 0 }
+      if (sel >= list.length) sel = Math.max(0, list.length - 1)
+      draw()
+    }
+    out.write('\x1b[1A\r\x1b[0J') // erase status + prompt rows, overlay takes over
+    await refresh()
+    const pollInt = setInterval(refresh, 2_000)
+    const animInt = setInterval(() => { spinTick++; draw() }, 400)
+    const action = await new Promise((resolve) => {
+      const done = (v) => { stdin.removeListener('keypress', onKey); resolve(v) }
+      const onKey = async (ch, key = {}) => {
+        const selSession = list[sel]
+        if (key.name === 'escape' || (key.ctrl && key.name === 'c')) return done(null)
+        if (key.name === 'return' && selSession) return done(selSession)
+        if (key.name === 'up') sel = Math.max(0, sel - 1)
+        else if (key.name === 'down') sel = Math.min(Math.max(0, list.length - 1), sel + 1)
+        else if ((ch === 'w' || ch === 'W') && selSession?.status === 'sleeping') {
+          try { await link.call('agent', 'wake', { sessionId: selSession.sessionId }) } catch { void 0 }
+          await refresh()
+          return
+        } else if ((ch === 'r' || ch === 'R') && selSession) {
+          try { await link.call('agent', 'stop', { sessionId: selSession.sessionId }) } catch { void 0 }
+          await refresh()
+          return
+        } else return
+        draw()
+      }
+      stdin.on('keypress', onKey)
+    })
+    clearInterval(pollInt)
+    clearInterval(animInt)
+    stdin.setRawMode(false)
+    out.write(`\x1b[${shown}A\x1b[0J`)
+    rl = makeRl()
+    showPrompt()
+    rebuilding = false
+    fleetOpen = false
+    if (!action) return
+    if (action.status === 'sleeping') enqueue(`/resume ${action.sessionId}`)
+    else enqueue(`/join ${action.sessionId}`)
   }
 
   const onSigint = () => {
@@ -951,13 +1146,13 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
       print(`  ${warn('!')} ${e.message}`)
     } finally {
       rl = makeRl()
-      rl.prompt()
+      showPrompt()
       rebuilding = false
     }
   }
 
   rl = makeRl()
-  rl.prompt()
+  showPrompt()
 
   // '/' on an empty prompt opens the command palette. Punctuation arrives
   // with an undefined key.name — the character itself is the match. The
@@ -965,13 +1160,24 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
   // setImmediate lets rl consume the keystroke first regardless of the
   // listener order a rebuilt rl leaves behind.
   process.stdin.on('keypress', (ch, key = {}) => {
-    if (ch !== '/' || key.ctrl || key.meta) return
     setImmediate(() => {
-      if (rl && !paletteOpen && !draining && rl.line === '/') void openPalette()
+      // eslint-disable-next-line no-control-regex
+      const clean = (s) => (s || '').replace(/^[\x00-\x1f\x7f]+/, '')
+      // Tab on an empty prompt opens the live agent overlay — the fleet's
+      // who/what/state strip claude-code-style, without touching the chat.
+      if ((key.name === 'tab' || ch === '\t') && rl && !paletteOpen && !fleetOpen && !draining && !state.busy && clean(rl.line) === '') {
+        return void openFleet()
+      }
+      // '/' on an empty prompt opens the command palette. Punctuation arrives
+      // with an undefined key.name — the character itself is the match.
+      if (ch === '/' && !key.ctrl && !key.meta && rl && !paletteOpen && !draining && clean(rl.line) === '/') void openPalette()
     })
   })
 
   await shellClosed
+  clearInterval(pollTimer)
+  clearInterval(tickTimer)
+  clearTimeout(firstPoll)
   print(`  ${dim('bye')}`)
   link.close()
 }
@@ -987,6 +1193,9 @@ export async function teamCli(args, port) {
   process.stdout.once('error', (e) => { if (e.code === 'EPIPE') process.exit(0); throw e })
   const print = (s) => process.stdout.write(`${s}\n`)
   const fail = (s) => { console.error(`harpy team: ${s}`); process.exitCode = 1 }
+  // `harpy team ... --port N` — strip the flag before subcommand parsing.
+  const pi = args.indexOf('--port')
+  if (pi >= 0) { port = Number(args[pi + 1]) || port; args = args.filter((_, i) => i !== pi && i !== pi + 1) }
   const link = new DaemonLink(port)
   try { await link.connect() } catch {
     return fail(`daemon is not running on :${port} — start it with \`harpy daemon start\``)

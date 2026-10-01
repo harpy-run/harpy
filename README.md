@@ -70,9 +70,14 @@ expose them.
 The built-in terminal shell — `harpy` in any terminal, or the **Harpy Team
 CLI** entry at the top of the new-session picker:
 
-| Agent chat | Teams | Memory |
-| --- | --- | --- |
-| <img src="docs/screenshots/cli-shell.svg" alt="Codex-style Harpy Team shell — agent prompt, inline tool trace, /exit" width="340" /> | <img src="docs/screenshots/cli-team.svg" alt="The /team wizard spawning a scoped bot, /team ls, /say" width="360" /> | <img src="docs/screenshots/cli-memory.svg" alt="/memory status, a remembered fact, /memory off" width="360" /> |
+| Agent chat | Teams | Memory | Agent strip |
+| --- | --- | --- | --- |
+| <img src="docs/screenshots/cli-shell.svg" alt="Codex-style Harpy Team shell — agent prompt, inline tool trace, /exit" width="340" /> | <img src="docs/screenshots/cli-team.svg" alt="The /team wizard spawning a scoped bot, /team ls, /say" width="360" /> | <img src="docs/screenshots/cli-memory.svg" alt="/memory status, a remembered fact, /memory off" width="360" /> | <img src="docs/screenshots/cli-fleet.svg" alt="Tab opens the live agent strip — working/idle/sleeping with purposes" width="360" /> |
+
+A live status line sits under the prompt: working bots get an animated dot,
+idle ones a solid dot, sleeping ones a hollow one — each named with the task it
+was given. Press **Tab** on an empty prompt for the fleet overlay (attach,
+wake, remove), **`/`** for the command palette.
 
 Regenerate these with `node scripts/screenshots.mjs` after CLI changes.
 

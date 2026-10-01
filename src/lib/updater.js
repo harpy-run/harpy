@@ -4,7 +4,7 @@
 // release before installing, which also keeps the checker safe when a
 // network is intercepted.
 
-export const CURRENT_VERSION = "2.6.18"
+export const CURRENT_VERSION = "2.6.19"
 export const RELEASE_URL = 'https://github.com/harpy-run/harpy/releases/latest'
 const RELEASE_API_URL = 'https://api.github.com/repos/harpy-run/harpy/releases/latest'
 

@@ -144,9 +144,20 @@ backend first, then `node scripts/smoke.mjs`.
   `/team` opens a guided new-bot form (name · agent picker · task — `default`
   is the standing team), `/team ls|up|rm|down` manages bots, `/say`
   (broadcast), `/peek` (history), `/join` (raw passthrough, Ctrl-] detaches),
-  `/sessions`, `/status`, `/daemon`, `/use`, `/cwd`, `/new`, `/update`,
-  `/open`, `/set`. The same ops are scriptable as `harpy team
-  ls|up|say|rm|down|sessions` — the surface agent CLIs drive;
+  `/resume` (wake a sleeping session and attach), `/sessions` (grouped by
+  working/idle/sleeping), `/status`, `/daemon`, `/use`, `/cwd`, `/new`,
+  `/update`, `/open`, `/set`. The prompt row carries a live status line above
+  it — daemon sessions are polled every ~2.5s and the row is redrawn in place
+  (save-cursor → up → clear → restore) with animated spinner dots on working
+  sessions, solid on idle, hollow on sleeping; `session.prompt` (the launch
+  task, ≤160 chars, persisted in `agent-sessions.json`) is each session's
+  purpose. **Tab** on an empty prompt opens the fleet overlay (live list,
+  Enter attaches, `w` wakes, `r` removes, esc backs out). Command output never
+  splices into a live input line — `print()` wipes the prompt row, prints,
+  re-glues status+prompt via readline's `_refreshLine`, and a "thinking…"
+  spinner rewrites one row until the agent's first output byte arrives. The
+  same ops are scriptable as `harpy team ls|up|say|rm|down|sessions`
+  (`--port N` supported) — the surface agent CLIs drive;
   `server/agent-skills.js` installs `skills/harpy/SKILL.md` onto
   `~/.agents/skills/harpy/` plus existing `~/.claude`/`~/.config/devin`
   skill dirs at every daemon boot so bots learn to add/remove teammates

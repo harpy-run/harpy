@@ -87,7 +87,7 @@ function card({ cwd, agent, port, connected }) {
     const used = spans.reduce((n, s) => n + s[0].length, 0)
     return [['  │ ', 'border'], [' '.repeat(MW)], ['  '], ...spans, [' '.repeat(Math.max(0, colW + 2 - used))], [' │', 'border']]
   }
-  const foot = ' / commands · /team bots · /exit quits'
+  const foot = ' / commands · tab agents · /exit quits'
   const overlay = { img: LOGO, x: PAD_X + 4 * CW + 4, y: PAD_TOP + 2 * LH + 3, size: Math.round(6 * LH - 10) }
   const lines = [
     [['']],
@@ -177,6 +177,23 @@ const scenes = {
     [['']],
     ...P('codex', [['/exit', 'fg']]),
     [['  bye', 'dim']],
+    [['']]
+  ] },
+
+  // Tab overlay — the live fleet strip: animated dot on a working bot,
+  // solid on idle, hollow on sleeping; each row carries its purpose.
+  'cli-fleet': { overlay: cardShell.overlay, lines: [
+    ...cardShell.lines,
+    [['  ⠋ ', 'ok'], ['s_148 claude ', 'fg'], ['— review PRs on this repo', 'dim'], ['   ·   ', 'dim'], ['●', 'ok'], [' 1 idle', 'fg'], ['   ·   ', 'dim'], ['○', 'dim'], [' 1 sleeping', 'fg']],
+    [['devin › ', 'accent', { bold: true }]],
+    [['']],
+    [['  agents', 'fg', { bold: true }], [' — 2 running · 1 sleeping', 'dim']],
+    [['']],
+    [['  › ⠋ s_148  claude · default  running  ', 'accent', { bold: true }], ['review PRs on this repo', 'dim'], ['  4m', 'dim']],
+    [['    ● s_142  devin  · default  running  ', 'fg'], ['docs only — no code changes', 'dim'], ['  12m', 'dim']],
+    [['    ○ s_130  codex             sleeping  ', 'dim'], ['watching for flaky tests', 'dim'], ['  22h', 'dim']],
+    [['']],
+    [['  ↑↓ select · enter attach · w wake · r remove · esc back', 'dim']],
     [['']]
   ] }
 }

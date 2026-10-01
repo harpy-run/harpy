@@ -64,6 +64,7 @@ function persistSessions() {
         owner: session.owner,
         index: session.index,
         team: session.team || undefined,
+        prompt: session.prompt || undefined,
         startedAt: session.startedAt,
         sleepingAt: session.sleepingAt || 0,
         status: session.state.status
@@ -431,7 +432,8 @@ export async function restoreSessions() {
       resumedAt: 0,
       lastActivityAt: record.startedAt || Date.now(),
       sleepingAt: Number(record.sleepingAt) || 0,
-      team: record.team || null
+      team: record.team || null,
+      prompt: record.prompt || ''
     }
     sessions.set(session.sessionId, session)
     // Sleeping sessions come back as resumable records — no process until a
@@ -535,7 +537,10 @@ export async function startRunner(ctx, { agent, prompt = '', cwd, workspace, col
     ownerName: ctx?.principal?.username || ownerKey(ctx),
     // A team is just a label on the session — the same "seats in a rig"
     // grouping, without an external orchestrator.
-    team: String(team || '').trim().slice(0, 64) || null
+    team: String(team || '').trim().slice(0, 64) || null,
+    // The operator's own task text (the launch prompt minus the injected
+    // memory context) — shown as the session's purpose in lists/statuslines.
+    prompt: String(prompt || '').trim().slice(0, 160)
   }
   let args
   try {
@@ -573,7 +578,8 @@ function sessionInfo(session) {
     team: session.team || null,
     pid: session.term?.pid || null,
     sleepingAt: session.sleepingAt || 0,
-    lastActivityAt: session.lastActivityAt || 0
+    lastActivityAt: session.lastActivityAt || 0,
+    prompt: session.prompt || ''
   }
 }
 
