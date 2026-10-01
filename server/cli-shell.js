@@ -8,7 +8,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
-import { ask, c, canOpenBrowser, choose, toggleMenu } from './cli-ui.js'
+import { ask, c, canOpenBrowser, choose, closePrompts, fit, toggleMenu } from './cli-ui.js'
 import { BoxedInput } from './cli-input.js'
 import { readCliConfig, resolvePort, writeCliConfig } from './cli-config.js'
 import { cliLang, translator } from './cli-i18n.js'
@@ -114,11 +114,22 @@ async function runAgentTurn(state, text) {
     let tail = ''
     let stderr = ''
     let wroteSinceBreak = false
+    let msgOpen = false
     // First real output kills the "thinking…" spinner row the caller draws.
     const write = (chunk) => {
       if (!state.wroteOutput) { state.wroteOutput = true; process.stdout.write('\r\x1b[2K') }
       process.stdout.write(chunk)
       wroteSinceBreak = true
+    }
+    // Agent replies render as a framed block: an accent `●` + agent name opens
+    // the card, every content line sits under a `│` rail, tool/status lines
+    // nest inside it, and the turn caps with `╰─`. Stream-safe — lines arrive
+    // one at a time and each just hangs on the rail.
+    const rail = `  ${c.accent('│')} `
+    const openBlock = () => { if (!msgOpen) { write(`  ${c.accent('●')} ${c.bold(AdapterClass.label || state.agent)}\n`); msgOpen = true } }
+    const writeMessage = (text) => {
+      openBlock()
+      for (const l of text.split('\n')) if (l) write(`${rail}${l}\n`)
     }
     child.stdout.on('data', (chunk) => {
       tail += chunk.toString('utf8')
@@ -129,9 +140,9 @@ async function runAgentTurn(state, text) {
         for (const event of adapter.normalizeLine(line, state) || []) {
           if (event.type === 'meta' && event.sessionId) state.agentSession = event.sessionId
           else if (event.providerSessionId) state.agentSession = event.providerSessionId
-          else if (event.type === 'message' && event.text) write(event.partial ? event.text : `${event.text}\n`)
-          else if (event.type === 'tool') write(dim(`  ⚙ ${event.tool?.name || 'tool'}\n`))
-          else if (event.type === 'status' && event.status === 'error') write(warn(`  ! ${event.reason || 'error'}\n`))
+          else if (event.type === 'message' && event.text) writeMessage(event.text)
+          else if (event.type === 'tool') { openBlock(); write(`${rail}${dim(`⚙ ${event.tool?.name || 'tool'}`)}\n`) }
+          else if (event.type === 'status' && event.status === 'error') { openBlock(); write(`${rail}${warn(`! ${event.reason || 'error'}`)}\n`) }
         }
       }
     })
@@ -148,9 +159,10 @@ async function runAgentTurn(state, text) {
         for (const event of adapter.normalizeLine(tail, state) || []) {
           if (event.type === 'meta' && event.sessionId) state.agentSession = event.sessionId
           else if (event.providerSessionId) state.agentSession = event.providerSessionId
-          else if (event.type === 'message' && event.text) write(`${event.text}\n`)
+          else if (event.type === 'message' && event.text) writeMessage(event.text)
         }
       }
+      if (msgOpen) write(`  ${c.accent('╰─')}\n`)
       if (wroteSinceBreak) write('\n')
       if (code === 0) {
         state.fresh = false
@@ -273,10 +285,17 @@ const MARK_W = Math.max(...HARPY_MARK.map((l) => l.length))
 function sessionCard(state, link, port) {
   // eslint-disable-next-line no-control-regex -- stripping ANSI escapes is the point
   const strip = (s) => s.replace(/\x1b\[[0-9;]*m/g, '')
-  const width = Math.min(76, Math.max(64, MARK_W + state.cwd.length + 16))
-  const colW = width - MARK_W - 6 // right column: ' ' + cell + trailing space
-  const row = (mark, cellText) =>
-    `  │ ${c.accent(mark.padEnd(MARK_W))}  ${cellText}${' '.repeat(Math.max(0, colW + 2 - strip(cellText).length))} │`
+  const cols = process.stdout.columns || 80
+  // Under ~88 cols the braille mark pushes the card past the terminal edge —
+  // drop it and let the info rows breathe instead of wrapping mid-glyph.
+  const mark = cols >= 88 ? HARPY_MARK : null
+  const width = Math.min(mark ? 76 : 66, cols - 4, Math.max(mark ? 64 : 38, (mark ? MARK_W : 0) + state.cwd.length + 16))
+  const colW = width - (mark ? MARK_W + 6 : 0) - 4
+  const row = mark
+    ? (markLine, cellText) =>
+      `  │ ${c.accent(markLine.padEnd(MARK_W))}  ${cellText}${' '.repeat(Math.max(0, colW + 2 - strip(cellText).length))} │`
+    : (_markLine, cellText) =>
+      `  │ ${cellText}${' '.repeat(Math.max(0, width - 2 - strip(cellText).length))} │`
   const info = (label, value, hint = '') => {
     const maxV = colW - 9 - (hint ? hint.length + 2 : 0)
     const v = value.length > maxV ? `…${value.slice(-Math.max(1, maxV - 1))}` : value
@@ -296,7 +315,7 @@ function sessionCard(state, link, port) {
   return [
     '',
     `  ╭${'─'.repeat(width)}╮`,
-    ...right.map((cellText, i) => row(HARPY_MARK[i] || '', cellText)),
+    ...right.map((cellText, i) => row(mark ? mark[i] || '' : '', cellText)),
     `  │${' '.repeat(width)}│`,
     `  │${dim(foot)}${' '.repeat(Math.max(0, width - foot.length - 1))} │`,
     `  ╰${'─'.repeat(width)}╯`,
@@ -416,6 +435,25 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
     input.show()
   }
 
+  // Pickers (choose/ask/toggleMenu/linkPickSession) own the terminal alone:
+  // the boxed input parks while they run, so arrow keys hit exactly one
+  // consumer — otherwise they drive the menu AND the input's history, and
+  // choose()'s cooked-mode exit leaves the revived box echoing ^[[B noise.
+  // rebuiltThisTurn keeps onLine from double-prompting afterwards.
+  const park = async (fn) => {
+    rebuilding = true
+    promptVisible = false
+    input?.stop()
+    try { return await fn() }
+    finally {
+      closePrompts() // a lingering readline eats keys meant for the box
+      input?.start()
+      showPrompt()
+      rebuilding = false
+      rebuiltThisTurn = true
+    }
+  }
+
   // Command/push output must never splice into a live input box — the editor
   // wipes the whole block, prints, and re-glues [status][box][context] under
   // it with the typed text and cursor position intact.
@@ -430,7 +468,13 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
     try { daemonSessions = await linkSessions(link); drawStatus() } catch { void 0 }
   }
   const pollTimer = setInterval(pollSessions, 2_500)
-  const tickTimer = setInterval(() => { spinTick++; drawStatus() }, 400)
+  // The 400ms tick exists to animate the spinner — when nothing is working it
+  // would just re-paint an identical strip every 400ms, so gate on `working`.
+  const tickTimer = setInterval(() => {
+    spinTick++
+    const now = Date.now()
+    if (daemonSessions.some((s) => s.status === 'running' && now - (s.lastActivityAt || s.startedAt || 0) < 10_000)) drawStatus()
+  }, 400)
   // First paint comes from the interval — an immediate call here would touch
   // paletteOpen/rebuilding before their `let`s initialize (TDZ).
   const firstPoll = setTimeout(pollSessions, 600)
@@ -485,11 +529,11 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
         { label: 'persistent memory', hint: '.harpy/MEMORY.md · AGENTS.md pointer · handoffs · launch hint', on: prefs.memory },
         { label: 'memory digest', hint: 'session-end run distills durable facts into MEMORY.md', on: prefs.digest }
       ]
-      await toggleMenu('memory', items, async (i) => {
+      await park(() => toggleMenu('memory', items, async (i) => {
         const key = i === 0 ? 'memory' : 'digest'
         const saved = await link.call('agent', 'saveMemoryPrefs', { [key]: !items[i].on })
         return saved[key]
-      })
+      }))
       report(await link.call('agent', 'memoryPrefs', {}))
     },
 
@@ -513,11 +557,11 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
       let id = String(rest).trim()
       if (!id) {
         // Radio list — the current agent carries the filled dot.
-        const picked = await choose('chat with', state.listed.map((a) => ({
+        const picked = await park(() => choose('chat with', state.listed.map((a) => ({
           value: a.id,
           label: `${a.id === state.agent ? '●' : '○'} ${a.id}`,
           hint: a.available ? 'installed' : dim(`missing — ${a.install?.command || 'install first'}`)
-        })), { defaultValue: state.agent })
+        })), { defaultValue: state.agent }))
         if (!picked || picked === 'back') return
         id = picked
       }
@@ -568,24 +612,24 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
         const all = await sessions()
         if (!all.length) return teamWizard()
         await teamList()
-        const action = await choose('team', [
+        const action = await park(() => choose('team', [
           { value: 'add', label: '＋ add a bot', hint: 'guided form — name · agent · task' },
           { value: 'rm', label: '✕ remove a bot', hint: 'pick from the list' },
           { value: 'down', label: '■ stop a team', hint: 'kills every bot in it' },
           { value: 'ls', label: '≡ list teams', hint: '' }
-        ])
+        ]))
         if (!action || action === 'back') return
         if (action === 'add') return teamWizard()
         if (action === 'ls') return
         if (action === 'rm') {
-          const bot = await linkPickSession(link, 'remove which bot', (s) => Boolean(s.team))
+          const bot = await park(() => linkPickSession(link, 'remove which bot', (s) => Boolean(s.team)))
           if (!bot) return print(`  ${dim('no team bots — /team adds one')}`)
           await link.call('agent', 'stop', { sessionId: bot.sessionId })
           return print(`  ${ok('✓')} ${bot.sessionId} removed`)
         }
         if (action === 'down') {
           const names = [...new Set(all.map((s) => s.team).filter(Boolean))]
-          const name = await choose('stop which team', names.map((t) => ({ value: t, label: t, hint: `${all.filter((s) => s.team === t).length} bots` })))
+          const name = await park(() => choose('stop which team', names.map((t) => ({ value: t, label: t, hint: `${all.filter((s) => s.team === t).length} bots` }))))
           if (!name || name === 'back') return
           const members = await teamSessions(name)
           let stopped = 0
@@ -600,7 +644,7 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
       if (sub === 'ls' || sub === 'list') return teamList()
       if (sub === 'rm' || sub === 'remove') {
         const ref = parts.join(' ')
-        const session = ref ? await findSession(ref) : await linkPickSession(link, 'remove which bot', (s) => Boolean(s.team))
+        const session = ref ? await findSession(ref) : await park(() => linkPickSession(link, 'remove which bot', (s) => Boolean(s.team)))
         if (!session) return ref ? err(`no session '${ref}' — /sessions`) : print(`  ${dim('no team bots')}`)
         await link.call('agent', 'stop', { sessionId: session.sessionId })
         print(`  ${ok('✓')} ${session.sessionId} removed`)
@@ -624,7 +668,7 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
         if (!name) {
           const all = await sessions()
           const names = [...new Set(all.map((s) => s.team).filter(Boolean))]
-          const picked = await choose('stop which team', names.map((t) => ({ value: t, label: t, hint: `${all.filter((s) => s.team === t).length} bots` })))
+          const picked = await park(() => choose('stop which team', names.map((t) => ({ value: t, label: t, hint: `${all.filter((s) => s.team === t).length} bots` }))))
           if (!picked || picked === 'back') return
           name = picked
         }
@@ -650,13 +694,13 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
         const all = await sessions()
         if (!all.length) return print(`  ${dim('no sessions — /team adds bots')}`)
         const teamNames = [...new Set(all.map((s) => s.team).filter(Boolean))]
-        const picked = await choose('say to', [
+        const picked = await park(() => choose('say to', [
           ...teamNames.map((t) => ({ value: `team:${t}`, label: `▣ ${t}`, hint: `team · ${all.filter((s) => s.team === t).length} bots` })),
           ...all.map((s) => ({ value: s.sessionId, label: `${s.sessionId}  ${s.agent}${s.team ? ` · ${s.team}` : ''}`, hint: `${s.status} · ${fmtAge(s.startedAt)} ago` }))
-        ])
+        ]))
         if (!picked || picked === 'back') return
         const target = picked.startsWith('team:') ? picked.slice(5) : picked
-        const message = await ask('message')
+        const message = await park(() => ask('message'))
         if (!message) return
         if (picked.startsWith('team:')) {
           const live = all.filter((s) => s.team === target && s.status === 'running').map((s) => s.sessionId)
@@ -712,7 +756,7 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
     async resume(rest) {
       if (!(await daemonUp())) return err(`daemon offline — /daemon start`)
       const ref = String(rest).trim()
-      const session = ref ? await findSession(ref) : await linkPickSession(link, 'resume which', (s) => s.status === 'sleeping')
+      const session = ref ? await findSession(ref) : await park(() => linkPickSession(link, 'resume which', (s) => s.status === 'sleeping'))
       if (!session) return print(`  ${dim(ref ? `no session '${ref}'` : 'no sessions')}`)
       if (session.status === 'sleeping') {
         try { await link.call('agent', 'wake', { sessionId: session.sessionId }); print(`  ${ok('✓')} woke ${session.sessionId}`) }
@@ -726,7 +770,7 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
       const [ref, count] = String(rest).trim().split(/\s+/)
       let session
       if (!ref) {
-        session = await linkPickSession(link, 'peek which')
+        session = await park(() => linkPickSession(link, 'peek which'))
         if (!session) return print(`  ${dim('no sessions — /team adds bots')}`)
       } else {
         session = await findSession(ref)
@@ -747,7 +791,7 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
       const ref = String(rest).trim()
       let session
       if (!ref) {
-        session = await linkPickSession(link, 'join which', (s) => s.status === 'running')
+        session = await park(() => linkPickSession(link, 'join which', (s) => s.status === 'running'))
         if (!session) return print(`  ${dim('no running sessions — /team adds bots')}`)
       } else {
         session = await findSession(ref)
@@ -788,7 +832,7 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
     async stop(rest) {
       if (!(await daemonUp())) return err(`daemon offline — /daemon start`)
       const ref = String(rest).trim()
-      const session = ref ? await findSession(ref) : await linkPickSession(link, 'stop which', (s) => s.status === 'running')
+      const session = ref ? await findSession(ref) : await park(() => linkPickSession(link, 'stop which', (s) => s.status === 'running'))
       if (!session) return ref ? err(`no session or team '${ref}'`) : print(`  ${dim('no running sessions')}`)
       await link.call('agent', 'stop', { sessionId: session.sessionId })
       print(`  ${ok('✓')} ${session.sessionId} stopped`)
@@ -908,7 +952,7 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
           const spinner = setInterval(() => {
             if (state.wroteOutput || !state.busy) return
             const el = Math.floor((Date.now() - startedAt) / 1000)
-            process.stdout.write(`\r\x1b[2K  ${c.accent(spinChar())} ${state.agent} ${dim(`${t('shThinking')}${el ? ` ${el}s ·` : ''} ${t('shCancels')}`)}`)
+            process.stdout.write(`\r\x1b[2K${fit(`  ${c.accent(spinChar())} ${state.agent} ${dim(`${t('shThinking')}${el ? ` ${el}s ·` : ''} ${t('shCancels')}`)}`, process.stdout.columns || 80)}`)
           }, 120)
           try { await runAgentTurn(state, text) } catch (error) { err(error.message || String(error)) }
           clearInterval(spinner)
@@ -970,15 +1014,16 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
       const now = Date.now()
       const running = list.filter((s) => s.status === 'running').length
       const sleeping = list.filter((s) => s.status === 'sleeping').length
-      const lines = [`  ${c.bold(t('shAgents'))} ${dim(`— ${running} running · ${sleeping} sleeping`)}`, '']
+      const w = (out.columns || 80) - 1
+      const lines = [fit(`  ${c.bold(t('shAgents'))} ${dim(`— ${running} running · ${sleeping} sleeping`)}`, w), '']
       for (const [i, s] of list.entries()) {
         const working = s.status === 'running' && now - (s.lastActivityAt || s.startedAt || 0) < 10_000
         const mark = s.status === 'sleeping' ? dim('○') : working ? ok(spinChar()) : s.status === 'stopped' ? dim('◌') : ok('●')
         const row = `${mark} ${s.sessionId}  ${s.agent}${s.team ? ` · ${s.team}` : ''}  ${s.status}${s.prompt ? `  ${dim(trunc(s.prompt, 34))}` : ''}  ${dim(fmtAge(s.startedAt))}`
-        lines.push(i === sel ? `  ${c.accent('›')} ${c.bold(row)}` : `    ${row}`)
+        lines.push(fit(i === sel ? `  ${c.accent('›')} ${c.bold(row)}` : `    ${row}`, w))
       }
-      if (!list.length) lines.push(`    ${dim(t('shNoSessions'))}`)
-      lines.push('', `  ${dim(t('shFleetKeys'))}`)
+      if (!list.length) lines.push(fit(`    ${dim(t('shNoSessions'))}`, w))
+      lines.push('', fit(`  ${dim(t('shFleetKeys'))}`, w))
       out.write(lines.join('\n') + '\n')
       shown = lines.length
     }
@@ -988,10 +1033,10 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
       draw()
     }
     out.write('\x1b[2A\r\x1b[0J') // erase status + context + prompt rows, overlay takes over
-    await refresh()
-    const pollInt = setInterval(refresh, 2_000)
-    const animInt = setInterval(() => { spinTick++; draw() }, 400)
-    const action = await new Promise((resolve) => {
+    // The keypress listener must attach before the first await — while no
+    // 'keypress' listener exists emitKeypressEvents drops its data consumer
+    // and keystrokes fall out of the parser entirely.
+    const actionP = new Promise((resolve) => {
       const done = (v) => { stdin.removeListener('keypress', onKey); resolve(v) }
       const onKey = async (ch, key = {}) => {
         const selSession = list[sel]
@@ -1012,6 +1057,10 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
       }
       stdin.on('keypress', onKey)
     })
+    await refresh()
+    const pollInt = setInterval(refresh, 2_000)
+    const animInt = setInterval(() => { spinTick++; draw() }, 400)
+    const action = await actionP
     clearInterval(pollInt)
     clearInterval(animInt)
     stdin.setRawMode(false)
@@ -1072,6 +1121,7 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
     } catch (e) {
       print(`  ${warn('!')} ${e.message}`)
     } finally {
+      closePrompts()
       input.start()
       showPrompt()
       rebuilding = false

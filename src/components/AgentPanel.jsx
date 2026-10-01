@@ -827,6 +827,14 @@ export function AgentPanel({ workspacePath, paneId } = {}) {
       }) : <span class="agent-history-empty">{t('agent.historyEmpty')}</span>}</vscode-scrollable>}
       <div class="agent-terminal-header">
         <span class="terminal-badge"><TerminalIcon size={13} /> {t('agent.terminalBadge')}</span>
+        {liveSessions.length > 0 && <span class="agent-fleet" role="list" aria-label={t('agent.fleetLabel')}>
+          {liveSessions.map((s) => {
+            const working = s.status === 'running' && Date.now() - (s.lastActivityAt || s.startedAt || 0) < 10_000
+            return <button key={s.sessionId} type="button" class={`agent-fleet-chip ${s.status} ${working ? 'working' : ''} ${s.sessionId === activeSessionId ? 'active' : ''}`} onClick={() => { selectSession(s.sessionId); activeAgent.value = s.agent }} title={`${sessionLabel(s)}${s.prompt ? ` — ${s.prompt}` : ''} (${s.status})`}>
+              <i class="agent-fleet-dot" /><span class="agent-fleet-id">{s.sessionId}</span>
+            </button>
+          })}
+        </span>}
         {activeSession && <span class="agent-terminal-provider"><AgentLogo agent={agents.find((agent) => agent.id === activeSession.agent)} size={16} /><strong>{viewingForeign ? `${activeSession.ownerName} · ${sessionLabel(activeSession)}` : sessionLabel(activeSession)}</strong><code>{viewingForeign && !isAdmin.value ? t('agent.readonly') : ({ running: t('agent.status.running'), stopped: t('agent.status.stopped'), sleeping: t('agent.status.sleeping') }[activeSession.status] || activeSession.status)}</code></span>}
         <span class="agent-header-spacer" />
         {activeSession?.status === 'sleeping' && (!viewingForeign || isAdmin.value) && <vscode-button icon="debug-start" onClick={wakeSession} disabled={waking}>{waking ? t('agent.waking') : t('agent.wake')}</vscode-button>}

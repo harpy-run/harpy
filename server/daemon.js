@@ -5,6 +5,7 @@ import net from 'node:net'
 import { execFileSync, spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { config, VERSION } from './config.js'
+import { readCliConfig } from './cli-config.js'
 
 // The daemon deliberately uses only Node's standard library.  This keeps the
 // npm install small while still giving the server the same always-on behaviour
@@ -113,6 +114,63 @@ function reapOrphanedListeners(port) {
   } catch { void 0 }
 }
 
+// Who actually listens on the port? The pidfile can be missing or stale while
+// a live harpy still holds it — `harpy start` runs the server foreground with
+// no state file at all, supervisors respawn under a new pid, and pids get
+// reused. Cross-platform listener→pid so stop/start can reclaim the port.
+function pidsOnPort(port) {
+  try {
+    if (process.platform === 'win32') {
+      const out = execFileSync('netstat', ['-ano'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+      const pids = new Set()
+      for (const line of out.split('\n')) {
+        const match = line.trim().match(/^TCP\s+\S+:(\d+)\s+\S+\s+LISTENING\s+(\d+)$/i)
+        if (match && Number(match[1]) === port) pids.add(Number(match[2]))
+      }
+      return [...pids]
+    }
+    if (process.platform === 'darwin') {
+      const out = execFileSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+      return [...new Set(out.split('\n').map((item) => Number(item.trim())).filter((pid) => Number.isInteger(pid) && pid > 0))]
+    }
+    const out = execFileSync('ss', ['-tlnp', `sport = :${port}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+    return [...new Set([...out.matchAll(/pid=(\d+)/g)].map((match) => Number(match[1])))]
+  } catch { return [] }
+}
+
+function killPid(pid) {
+  if (!pid || pid === process.pid) return
+  try {
+    if (process.platform === 'win32') execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
+    else {
+      try { process.kill(-pid, 'SIGTERM') } catch { process.kill(pid, 'SIGTERM') }
+    }
+  } catch { void 0 }
+}
+
+// Kills the process holding the port — but only once /api/health proves it is
+// OUR server. A foreign app bound to the same port is never touched; it keeps
+// `startDaemon` honest about "port already in use".
+export async function killPortHolder(port) {
+  const normalized = normalizePort(port)
+  if (!(await healthProbe(normalized)).harpy) return false
+  const pids = pidsOnPort(normalized).filter((pid) => pid !== process.pid)
+  if (!pids.length) return false
+  for (const pid of pids) killPid(pid)
+  await waitForPortFree(normalized, 5_000)
+  for (const pid of pids) {
+    if (pid === process.pid) continue
+    if (processRunning(pid)) {
+      try {
+        if (process.platform === 'win32') execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
+        else process.kill(pid, 'SIGKILL')
+      } catch { void 0 }
+    }
+  }
+  await waitForPortFree(normalized, 2_000)
+  return !(await probePort(normalized))
+}
+
 function pidMatchesDaemon(pid) {
   if (!processRunning(pid)) return false
   if (process.platform === 'win32') return true
@@ -179,18 +237,38 @@ export async function healthProbe(port, timeout = 1200) {
   }
 }
 
-export async function daemonStatus({ port = config.port } = {}) {
-  const normalizedPort = normalizePort(port)
+export async function daemonStatus({ port } = {}) {
+  const explicitPort = port !== undefined
+  const normalizedPort = normalizePort(port ?? config.port)
   const pid = readPid()
   const alive = pidMatchesDaemon(pid)
-  const listening = await probePort(normalizedPort)
-  if (!alive && pid) removeState(pid)
+  // Read state BEFORE removeState can wipe it — the remembered port is the
+  // only record of where an untracked/foreground server actually listens.
+  // Probe every known candidate (requested, state, cli.json): a server on a
+  // custom port must be seen even when env.PORT disagrees with it.
   const state = readState()
-  const configuredPort = Number(state.port) || normalizedPort
+  const candidates = [...new Set([normalizedPort, Number(state.port), Number(readCliConfig().port)]
+    .filter((value) => Number.isInteger(value) && value > 0))]
+  const configuredPort = Number(state.port)
+    || (explicitPort ? normalizedPort : Number(readCliConfig().port))
+    || normalizedPort
+  // `listening` keeps its contract — something holds the REQUESTED port —
+  // while `listeningPort` discovers where a real listener actually sits, so a
+  // daemon on a custom port is found even when env.PORT disagrees with it.
+  const listening = await probePort(normalizedPort)
+  let listeningPort = listening ? normalizedPort : null
+  if (!listeningPort) {
+    for (const candidate of candidates) {
+      if (candidate === normalizedPort) continue
+      if (await probePort(candidate)) { listeningPort = candidate; break }
+    }
+  }
+  if (!alive && pid) removeState(pid)
   return {
     version: VERSION,
     running: alive,
     listening,
+    listeningPort,
     pid: alive ? pid : null,
     port: configuredPort,
     workspace: state.workspace || null,
@@ -238,7 +316,16 @@ export async function startDaemon({ port = config.port, workspace } = {}) {
     current = await daemonStatus({ port: normalizedPort })
   }
   if (current.running) return { ...current, started: false, message: 'daemon already running' }
-  if (current.listening) return { ...current, started: false, message: `port ${normalizedPort} is already in use` }
+  if (current.listening) {
+    // An untracked harpy (foreground `harpy start`, orphan from an older
+    // update) holding the port used to wedge every restart here forever.
+    // Reclaim it by health identity — a foreign app is still refused below.
+    if ((await healthProbe(normalizedPort)).harpy) {
+      await killPortHolder(normalizedPort)
+      current = await daemonStatus({ port: normalizedPort })
+    }
+    if (current.listening) return { ...current, started: false, message: `port ${normalizedPort} is already in use` }
+  }
 
   const unit = systemdUnit()
   if (unit) {
@@ -276,7 +363,7 @@ export async function stopDaemon() {
   const unit = systemdUnit()
   if (unit) {
     try {
-      const port = Number(readState().port) || config.port
+      const port = Number(readState().port) || Number(readCliConfig().port) || config.port
       execFileSync('systemctl', [...unit, 'stop', SERVICE_NAME], { stdio: 'ignore' })
       const deadline = Date.now() + 4_000
       let pid = readPid()
@@ -285,33 +372,42 @@ export async function stopDaemon() {
         pid = readPid()
       }
       reapOrphanedListeners(port)
+      await killPortHolder(port)
       removeState()
       await waitForPortFree(port)
       return { stopped: true }
     } catch { /* fall through to the direct kill when systemctl fails */ }
   }
   const pid = readPid()
-  if (!pid || !processRunning(pid)) { removeState(pid); return { stopped: false, message: 'daemon is not running' } }
-  try {
-    if (process.platform === 'win32') execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
-    else {
-      try { process.kill(-pid, 'SIGTERM') } catch { process.kill(pid, 'SIGTERM') }
+  // Capture the remembered port BEFORE killing — the dying server's own
+  // cleanup removes state.json, which is the only record of a custom port.
+  // Sweep every candidate: the live holder may sit on the cli.json port while
+  // state.json remembers another.
+  const ports = [...new Set([Number(readState().port), Number(readCliConfig().port), config.port]
+    .filter((value) => Number.isInteger(value) && value > 0))]
+  let stopped = false
+  if (pid && processRunning(pid)) {
+    killPid(pid)
+    const deadline = Date.now() + 4_000
+    while (processRunning(pid) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100))
+    if (processRunning(pid)) {
+      try {
+        if (process.platform === 'win32') execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
+        else process.kill(pid, 'SIGKILL')
+      } catch { void 0 }
     }
-  } catch (error) {
-    if (error?.code !== 'ESRCH') throw error
+    stopped = true
   }
-  const deadline = Date.now() + 4_000
-  while (processRunning(pid) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100))
-  if (processRunning(pid)) {
-    try {
-      if (process.platform === 'win32') execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
-      else process.kill(pid, 'SIGKILL')
-    } catch { void 0 }
+  // The pidfile only covers daemon-managed processes — a foreground
+  // `harpy start` or a respawned orphan owns no pid entry yet still holds
+  // the port, which is how updates used to wedge on "port already in use".
+  for (const port of ports) {
+    if (await killPortHolder(port)) stopped = true
+    reapOrphanedListeners(port)
+    await waitForPortFree(port)
   }
-  const port = Number(readState().port) || config.port
-  reapOrphanedListeners(port)
   removeState(pid)
-  await waitForPortFree(port)
+  if (!stopped) return { stopped: false, message: 'daemon is not running' }
   return { stopped: true, pid }
 }
 

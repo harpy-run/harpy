@@ -43,7 +43,10 @@ differs from `package.json` — covers `npm i -g .`/git installs where
 - `harpy update [--check|--yes]` — checks npm registry **and** GitHub
   releases/tags, applies through the install channel (`npm i -g` for global
   installs, `git pull --ff-only` + rebuild for checkouts), then restarts the
-  daemon **and verifies `/api/health` answers before reporting success**.
+  daemon **and verifies `/api/health` answers before reporting success**. The
+  restart reclaims the port by health identity — an untracked harpy holding it
+  (foreground `harpy start`, stale-pidfile orphan) is killed via
+  `killPortHolder`, while a foreign app is still refused.
   `server/update.js` holds the logic: a lockdir at
   `$HARPY_HOME/daemon/update.lock` serializes concurrent updaters and
   `update-state.json` records the phase (`install`/`restart`/`done`/`failed`)

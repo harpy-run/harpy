@@ -1731,6 +1731,54 @@ vscode-badge, .git-count, .git-badge, .agent-presence-count,
   white-space: nowrap;
 }
 
+/* Live fleet strip inside the AGENT TERMINAL header — one chip per live
+   session so the whole system is glanceable even when tabs scroll away.
+   The dot mirrors the CLI statusline: pulsing while the session produced
+   output in the last ~10s, solid while idle, hollow while sleeping. */
+.agent-fleet {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  min-width: 0;
+  margin-left: 8px;
+  overflow: hidden;
+}
+
+.agent-fleet-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ui-muted);
+  font: 10px var(--mono);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.agent-fleet-chip:hover { background: var(--ui-hover); color: var(--ui-text); }
+.agent-fleet-chip.active { color: var(--ui-text); }
+
+.agent-fleet-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  border-radius: 50%;
+  background: var(--ui-faint);
+}
+
+.agent-fleet-chip.running .agent-fleet-dot { background: var(--ui-green); }
+.agent-fleet-chip.working .agent-fleet-dot {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ui-green) 18%, transparent);
+  animation: agent-pulse 1s ease-in-out infinite;
+}
+.agent-fleet-chip.sleeping { opacity: .65; }
+.agent-fleet-chip.sleeping .agent-fleet-dot { background: transparent; border: 1px solid var(--ui-faint); }
+
+.agent-fleet-id { overflow: hidden; max-width: 64px; text-overflow: ellipsis; }
+
 .agent-terminal-provider {
   display: inline-flex;
   min-width: 0;

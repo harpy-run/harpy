@@ -28,6 +28,33 @@ export const c = {
   cyan: wrap(36)
 }
 
+// ANSI-aware truncate: a line longer than the terminal wraps to a second row
+// and breaks every cursor-up redraw (the boxed input, fleet overlay and the
+// status strip all assume one logical line = one row). fit() caps visible
+// width and re-closes colors so narrow terminals degrade to ellipsis instead
+// of duplicated rows.
+export function fit(s, width) {
+  const src = String(s)
+  // eslint-disable-next-line no-control-regex -- measuring visible width
+  const re = /\x1b\[[0-9;?]*[ -/]*[@-~]/g
+  if (src.replace(re, '').length <= width) return src
+  if (width <= 1) return '…'
+  let out = ''
+  let used = 0
+  let i = 0
+  while (i < src.length && used < width - 1) {
+    re.lastIndex = i
+    const m = re.exec(src)
+    if (m && m.index === i) { out += m[0]; i = re.lastIndex; continue }
+    const end = m ? m.index : src.length
+    const take = Math.min(end - i, width - 1 - used)
+    out += src.slice(i, i + take)
+    used += take
+    i += take
+  }
+  return `${out}…\x1b[0m`
+}
+
 export function box(title, rows) {
   // eslint-disable-next-line no-control-regex -- stripping ANSI escapes is the point
   const plain = (row) => row.replace(/\x1b\[[0-9;]*m/g, '')
@@ -93,13 +120,16 @@ export async function choose(title, options, { defaultValue, footer } = {}) {
   let rows = 0
   const render = () => {
     if (rows) out.write(`\x1b[${rows}A\x1b[0J`) // cursor back to row 1, wipe the block
+    const w = (out.columns || 80) - 1
     const lines = title ? [`  ${c.bold(title)}`] : []
     for (const [i, option] of options.entries()) {
       const text = `${option.label}${option.hint ? `  ${c.dim(option.hint)}` : ''}`
       lines.push(i === index ? `  ${c.accent('›')} ${c.bold(text)}` : `    ${text}`)
     }
     lines.push(`  ${c.dim(footer || '↑↓ move · enter select · esc back')}`)
-    out.write(lines.join('\n') + '\n')
+    // Every row must fit one terminal line — a wrapped option breaks the
+    // cursor-up math above and smears the list on each arrow key.
+    out.write(lines.map((l) => fit(l, w)).join('\n') + '\n')
     rows = lines.length
   }
   render()
@@ -143,6 +173,7 @@ export async function toggleMenu(title, items, onToggle) {
   let closed = false
   const render = () => {
     if (rows) out.write(`\x1b[${rows}A\x1b[0J`)
+    const w = (out.columns || 80) - 1
     const lines = title ? [`  ${c.bold(title)}`] : []
     for (const [i, item] of items.entries()) {
       const mark = item.on ? c.ok('◉') : c.dim('○')
@@ -150,7 +181,7 @@ export async function toggleMenu(title, items, onToggle) {
       lines.push(i === index ? `  ${c.accent('›')} ${mark} ${c.bold(text)}` : `    ${mark} ${text}`)
     }
     lines.push(`  ${c.dim('↑↓ move · space toggles · esc done')}`)
-    out.write(lines.join('\n') + '\n')
+    out.write(lines.map((l) => fit(l, w)).join('\n') + '\n')
     rows = lines.length
   }
   render()

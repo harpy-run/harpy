@@ -187,20 +187,25 @@ export async function applyUpdate({ restartDaemon = true } = {}) {
     if (restartDaemon) {
       const { stopDaemon, startDaemon, daemonStatus, healthProbe } = await import('./daemon.js')
       const status = await daemonStatus()
-      if (status.running || status.listening) {
-        writeUpdateState({ phase: 'restart', from: VERSION, mode })
+      // `listeningPort` is where a real server was found — it can differ from
+      // the configured port when the running copy came from a foreground
+      // `harpy start` or an older state record. Restart must target THAT port
+      // or the new daemon is spawned against a port the old one still owns.
+      const restartPort = status.listeningPort || status.port
+      if (status.running || status.listening || status.listeningPort) {
+        writeUpdateState({ phase: 'restart', from: VERSION, mode, port: restartPort })
         await stopDaemon()
-        await startDaemon({ port: status.port })
+        await startDaemon({ port: restartPort })
         // Verify harpy itself answers — not just a bound socket — and re-nudge
         // a supervisor that gave up. A daemon that never returns is reported
         // as a failure, not "restarted".
         const deadline = Date.now() + 45_000
-        let probe = await healthProbe(status.port)
+        let probe = await healthProbe(restartPort)
         while (!probe.harpy && Date.now() < deadline) {
           await new Promise((resolve) => setTimeout(resolve, 600))
-          const check = await daemonStatus({ port: status.port })
-          if (!check.running && !check.listening) await startDaemon({ port: status.port })
-          probe = await healthProbe(status.port)
+          const check = await daemonStatus({ port: restartPort })
+          if (!check.running && !check.listening) await startDaemon({ port: restartPort })
+          probe = await healthProbe(restartPort)
         }
         if (!probe.harpy) {
           throw new Error('daemon did not come back after the update — recover with `harpy daemon start`')

@@ -11,7 +11,7 @@
 // terminal, the same way the old code rebuilt readline.
 
 import readline from 'node:readline'
-import { c } from './cli-ui.js'
+import { c, fit } from './cli-ui.js'
 
 const dim = (s) => c.dim(s)
 const border = (s) => c.dim(s)
@@ -20,6 +20,12 @@ const accent = (s) => c.accent(s)
 // eslint-disable-next-line no-control-regex -- measuring visible width
 const stripAnsi = (s) => String(s).replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '')
 const cutTail = (s, n) => (s.length > n ? `…${s.slice(s.length - n + 1)}` : s)
+
+// emitKeypressEvents unshifts chunks that arrive while no 'keypress' listener
+// is attached — bytes typed in a stop()→attach() gap replay later, out of
+// order, even duplicated. One permanent sink keeps the count above zero so
+// parked windows (fleet overlay, /join, wizards) can never corrupt the stream.
+let sinkAttached = false
 
 export class BoxedInput {
   constructor({ agent, cwd, t, statusRow, menuItems, onLine, onClose, onSigint, onTabEmpty, history }) {
@@ -73,19 +79,22 @@ export class BoxedInput {
     const left = dim(`  ${this.agent()} · ${cutTail(this.cwd(), Math.max(8, cols - 52))}`)
     const right = dim(` ${this.t('shInputHints')} `)
     const gap = cols - stripAnsi(left).length - stripAnsi(right).length
-    const hint = gap >= 2 ? left + ' '.repeat(gap) + right : left
+    const hint = fit(gap >= 2 ? left + ' '.repeat(gap) + right : left, cols)
 
+    // Every row is fit() to the terminal width — a wrapped row would make the
+    // cursor-up math in render()/reprint() land one row short and smear the
+    // status line down the screen on each keystroke.
     const lines = [
-      this.statusRow ? this.statusRow() : '',
+      this.statusRow ? fit(this.statusRow(), cols) : '',
       '  ' + border('╭' + '─'.repeat(viewW + 4) + '╮'),
       '  ' + border('│') + ' ' + accent('›') + ' ' + body + ' '.repeat(Math.max(0, viewW - stripAnsi(body).length)) + ' ' + border('│'),
       '  ' + border('╰' + '─'.repeat(viewW + 4) + '╯'),
       hint,
       ...items.map((m, i) => {
         const label = `/${m.name}${m.args ? ' …' : ''}`
-        return i === this.sel
+        return fit(i === this.sel
           ? `    ${accent('› ' + label.padEnd(14))} ${dim(m.desc)}`
-          : `      ${dim(label.padEnd(14))} ${dim(m.desc)}`
+          : `      ${dim(label.padEnd(14))} ${dim(m.desc)}`, cols)
       })
     ]
     return { lines, start }
@@ -134,7 +143,8 @@ export class BoxedInput {
   // Repaint just the status strip above the box without moving the cursor.
   paintStatus(text) {
     if (!this.drawn || !this.active) return
-    process.stdout.write(`\x1b[s\x1b[2A\r\x1b[2K${text}\x1b[u`)
+    const cols = Math.min(process.stdout.columns || 80, 100)
+    process.stdout.write(`\x1b[s\x1b[2A\r\x1b[2K${fit(text, cols)}\x1b[u`)
   }
 
   // Print output above the block, then re-glue it — transcript stays clean.
@@ -163,7 +173,9 @@ export class BoxedInput {
     this._stopped = false
     stdin.setRawMode(true)
     stdin.resume()
+    stdin.off('keypress', this._keyHandler) // nested start() must not double-attach
     stdin.on('keypress', this._keyHandler)
+    if (!sinkAttached) { sinkAttached = true; stdin.on('keypress', () => { }) }
     process.stdout.on('resize', this._resizeHandler)
   }
 

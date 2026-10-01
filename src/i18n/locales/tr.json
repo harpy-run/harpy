@@ -241,6 +241,7 @@
   "agent.stopWatching": "İzlemeyi bırak",
   "agent.readonly": "salt okunur",
   "agent.terminalBadge": "AJAN TERMİNALİ",
+  "agent.fleetLabel": "Canlı ajan oturumları",
   "agent.status.running": "çalışıyor",
   "agent.status.stopped": "durdu",
   "agent.files": "{count} dosya",
