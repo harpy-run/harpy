@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import readline from 'node:readline'
 import { spawn } from 'node:child_process'
-import { box, c } from './cli-ui.js'
+import { box, c, canOpenBrowser } from './cli-ui.js'
 import { readCliConfig, resolvePort, writeCliConfig } from './cli-config.js'
 import { config, VERSION } from './config.js'
 import { enhancedEnv } from './util/env.js'
@@ -526,10 +526,17 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
     },
 
     async open() {
+      const local = `http://localhost:${port}`
+      const { shareStatus } = await import('./share.js')
+      const share = shareStatus()
+      print(`  ${dim('local')}    ${c.cyan(local)}`)
+      if (share.url) print(`  ${dim('public')}   ${c.cyan(share.url)}`)
+      // Headless shells (VPS over ssh) have nowhere to open — the links
+      // above are the point; only launch a browser when one can exist.
+      if (!canOpenBrowser()) return print(`  ${dim('no browser on this machine — copy a link')}`)
       const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'cmd' : 'xdg-open'
-      const args = process.platform === 'win32' ? ['/c', 'start', '', `http://localhost:${port}`] : [`http://localhost:${port}`]
+      const args = process.platform === 'win32' ? ['/c', 'start', '', local] : [local]
       try { spawn(opener, args, { detached: true, stdio: 'ignore' }).unref() } catch { void 0 }
-      print(`  ${c.cyan(`http://localhost:${port}`)}`)
     },
 
     async update() {

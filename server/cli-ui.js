@@ -7,6 +7,13 @@ import { emitKeypressEvents } from 'node:readline'
 
 export const isInteractive = () => Boolean(process.stdin.isTTY && process.stdout.isTTY)
 
+// macOS/Windows always have a browser; Linux only when a desktop session is
+// actually there — a bare VPS ssh session has no DISPLAY/WAYLAND and
+// xdg-open silently goes nowhere.
+export const canOpenBrowser = () =>
+  process.platform === 'darwin' || process.platform === 'win32' ||
+  Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY)
+
 const paint = (code) => (text) => `\x1b[${code}m${text}\x1b[0m`
 const noColor = Boolean(process.env.NO_COLOR) || !process.stdout.isTTY
 const wrap = (code) => (text) => (noColor ? String(text) : paint(code)(text))

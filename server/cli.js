@@ -2,7 +2,7 @@
 import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
-import { ask, box, c, choose, closePrompts, confirm, isInteractive } from './cli-ui.js'
+import { ask, box, c, choose, closePrompts, confirm, isInteractive, canOpenBrowser } from './cli-ui.js'
 import { cliConfigExists, readCliConfig, resolvePort, validPort, writeCliConfig } from './cli-config.js'
 import { cliLang, envLang, LOCALES, noWords, translator, yesWords, ynHint } from './cli-i18n.js'
 
@@ -100,6 +100,20 @@ function openBrowser(url) {
   try { spawn(opener, args, { detached: true, stdio: 'ignore' }).unref() } catch { void 0 }
 }
 
+// "Open web UI" on a VPS has nowhere to open — always print the reachable
+// URLs (local, LAN, public tunnel) and only launch a browser when the
+// machine plausibly has one.
+async function openWebUi(port) {
+  const t = translator(cliLang())
+  const { shareStatus } = await import('./share.js')
+  const share = shareStatus()
+  console.log(`  ${c.dim(t('rowLocal'))}    ${c.cyan(`http://localhost:${port}`)}`)
+  for (const ip of lanIps()) console.log(`  ${c.dim(t('rowLan'))}      ${c.cyan(`http://${ip}:${port}`)}`)
+  if (share.url) console.log(`  ${c.dim(t('rowPublic'))}   ${c.cyan(share.url)}`)
+  if (canOpenBrowser()) openBrowser(`http://localhost:${port}`)
+  else console.log(`  ${c.dim(t('homeOpenNoBrowser'))}`)
+}
+
 // --- interactive home -----------------------------------------------------
 
 async function home() {
@@ -155,7 +169,7 @@ async function home() {
     } else if (action === 'dash') {
       await dashboard()
     } else if (action === 'open') {
-      if (status.listening) openBrowser(`http://localhost:${status.port}`)
+      if (status.listening) await openWebUi(status.port)
       else console.log(`  ${c.warn(t('msgNoListen'))}`)
     }
   }
@@ -201,7 +215,7 @@ async function dashboard() {
 
     if (action === null || action === 'back') break
     if (action === 'open') {
-      if (status.listening) openBrowser(`http://localhost:${status.port}`)
+      if (status.listening) await openWebUi(status.port)
       else console.log(`  ${c.warn(t('msgNoListen'))}`)
     } else if (action === 'start') {
       if (status.running) await stopDaemon()
@@ -289,8 +303,10 @@ async function shareCommand(args) {
       shareDisable()
       console.log(`  ${c.ok('✓')} ${t('msgDisabled')}`)
     } else if (action === 'open') {
-      if (st.url) openBrowser(st.url)
-      else console.log(`  ${c.warn(t('shareNoUrl'))}`)
+      if (st.url) {
+        console.log(`  ${c.cyan(st.url)}`)
+        if (canOpenBrowser()) openBrowser(st.url)
+      } else console.log(`  ${c.warn(t('shareNoUrl'))}`)
     } else if (action === 'pubkey') {
       console.log(st.pubkey ? `\n  ${c.cyan(st.pubkey)}\n` : `  ${c.dim(t('shareNoKey'))}`)
     } else if (action === 'enable') {
