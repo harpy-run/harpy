@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { Adapter } from '../adapter.js'
 
 export class DevinAdapter extends Adapter {
@@ -12,8 +13,22 @@ export class DevinAdapter extends Adapter {
   // After a daemon restart, continue the conversation this session was on
   // instead of dropping the chat into a fresh one.
   buildResumeArgs() { return ['-c'] }
-  // -p's optional PROMPT value must directly follow the flag, so -c goes last.
-  buildContinueArgs({ prompt } = {}) { return ['-p', ...(prompt ? [prompt] : []), '--respect-workspace-trust=false', '-c'] }
+  // `devin -p` prints no session id — the just-created conversation is the
+  // newest entry in `devin list --format json` for this working directory.
+  captureSessionId({ cwd } = {}) {
+    try {
+      const raw = execFileSync('devin', ['list', '--format', 'json'], { cwd, encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'pipe', 'ignore'] })
+      const sessions = JSON.parse(raw || '[]')
+      return sessions.sort((a, b) => (b.last_activity_at || 0) - (a.last_activity_at || 0))[0]?.id || null
+    } catch { return null }
+  }
+  // -p's optional PROMPT value must directly follow the flag, so the resume
+  // flag goes last: `-r <id>` targets the captured conversation and `-c`
+  // (most recent) is only a fallback.
+  buildContinueArgs({ prompt, sessionId } = {}) {
+    const resume = sessionId ? ['-r', sessionId] : ['-c']
+    return ['-p', ...(prompt ? [prompt] : []), '--respect-workspace-trust=false', ...resume]
+  }
   // -p's optional PROMPT value must directly follow the flag — anything
   // between them turns the prompt into a PATH argument instead.
   buildArgs({ prompt } = {}) { return ['-p', ...(prompt ? [prompt] : []), '--respect-workspace-trust=false'] }

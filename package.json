@@ -1,6 +1,6 @@
 {
   "name": "@harpy-run/harpy",
-  "version": "2.6.11",
+  "version": "2.6.12",
   "description": "Self-hosted control plane for AI coding agents — web and mobile",
   "keywords": [
     "ai",

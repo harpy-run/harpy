@@ -160,14 +160,18 @@ from the login shell plus well-known dirs, also used for agent/pty spawn env);
 `interactive: true`. `buildResumeArgs` re-spawns a daemon PTY session after a
 restart; `buildContinueArgs({prompt, sessionId})` is the shell's headless
 follow-up path — adapters that can target a conversation id (codex
-`thread.started`, claude `system/init`) should resume it directly rather than
-a global `--last`/`--continue`, which can attach to an unrelated session.
+`thread.started`, claude `system/init`, opencode JSONL `sessionID`) resume it
+directly rather than a global `--last`/`--continue`, which can attach to an
+unrelated session; `captureSessionId({cwd})` covers CLIs whose output carries
+no id (devin re-reads `devin list --format json` for the newest session).
 Each adapter may also declare `static
 install` (`{ command, windows? }`) — the CLI's one-line installer, shown in
 the new-session modal so an unavailable agent can be installed in a visible
 terminal. Detection results are cached in `$HARPY_HOME/agent-availability.json`
 for 24h (probing scans the login-shell/known-dir PATH, not just the service
-PATH); `agent.agents` with `{ refresh: true }` forces a re-check, the server
+PATH); `agent.agents` with `{ refresh: true }` forces a re-check (the shell
+exposes it as `/agents refresh` for CLIs installed after the first probe),
+the server
 re-probes hourly and broadcasts `agent.agents` when availability changes,
 and opening the new-session modal triggers a fresh check. Adding an
 8th requires updating `registerAllAdapters` **and** the `agents.length !== 7`

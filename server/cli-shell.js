@@ -125,7 +125,7 @@ async function runAgentTurn(state, text) {
       write(warn(`\n  could not run ${AdapterClass.cli}: ${error.message}\n`))
       resolve(false)
     })
-    child.on('close', (code) => {
+    child.on('close', async (code) => {
       state.child = null
       // Flush the unterminated tail through the same normalizer.
       if (tail.trim()) {
@@ -136,7 +136,15 @@ async function runAgentTurn(state, text) {
         }
       }
       if (wroteSinceBreak) write('\n')
-      if (code === 0) { state.fresh = false; resolve(true); return }
+      if (code === 0) {
+        state.fresh = false
+        // CLIs that never print a session id (devin) get one targeted resume
+        // anyway: the adapter locates the just-created conversation.
+        if (!state.agentSession && adapter.captureSessionId) {
+          try { state.agentSession = (await adapter.captureSessionId({ cwd: state.cwd })) || null } catch { void 0 }
+        }
+        resolve(true); return
+      }
       // A resume that failed (stale/expired session file) is retried once as
       // a fresh turn — the user sees one clean answer either way.
       if (!state.fresh && !state.cancelled) {
@@ -176,7 +184,7 @@ function sessionTag(s) {
 // Command palette entries — `args` flags commands that take arguments: the
 // palette prefills `/name ` instead of running them blindly.
 const PALETTE = [
-  { name: 'agents', desc: 'list installed agent CLIs' },
+  { name: 'agents', desc: 'list agent CLIs · /agents refresh re-probes' },
   { name: 'use', args: true, desc: 'switch the chat agent' },
   { name: 'new', desc: 'fresh conversation' },
   { name: 'cwd', args: true, desc: 'working directory' },
@@ -291,7 +299,7 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
     async help() {
       print(table([
         [c.accent('chat'), ''],
-        ['/agents', 'list installed agent CLIs'],
+        ['/agents', 'list agent CLIs — refresh re-probes'],
         ['/use <id>', 'switch the chat agent (claude, codex, gemini, …)'],
         ['/new', 'start a fresh conversation (drops resume)'],
         ['/cwd [path]', 'show or change the working directory'],
@@ -315,7 +323,13 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
       ]))
     },
 
-    async agents() {
+    async agents(rest) {
+      // The availability cache lives 24h — a CLI installed after the first
+      // probe reads as missing until `refresh` re-scans the PATH.
+      if (String(rest).trim() === 'refresh') {
+        state.listed = await listAgents({ refresh: true })
+        print(`  ${ok('✓')} re-probed agent CLIs`)
+      }
       const rows = state.listed.map((a) => [
         a.id === state.agent ? c.ok(`● ${a.id}`) : `  ${a.id}`,
         a.label,
@@ -334,7 +348,7 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
       state.agentSession = null
       writeCliConfig({ agent: id })
       setPrompt()
-      print(`  ${ok('✓')} chatting with ${c.accent(id)} — ${listed.find((a) => a.id === id)?.available ? '' : warn('not installed yet, /agents shows the installer')}`)
+      print(`  ${ok('✓')} chatting with ${c.accent(id)} — ${state.listed.find((a) => a.id === id)?.available ? '' : warn('not installed yet, /agents shows the installer')}`)
     },
 
     async new() { state.fresh = true; state.agentSession = null; print(`  ${dim('next message starts a fresh conversation')}`) },
@@ -372,7 +386,7 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
         const [name, agentId, ...promptParts] = parts
         if (!name || !agentId) return err('usage: /team up <name> <agent> [prompt]')
         if (!state.adapters.has(agentId)) return err(`unknown agent '${agentId}' — /agents`)
-        if (!listed.find((a) => a.id === agentId)?.available) return err(`${agentId} is not installed — /agents`)
+        if (!state.listed.find((a) => a.id === agentId)?.available) return err(`${agentId} is not installed — /agents refresh if you just installed it`)
         const promptText = promptParts.join(' ')
         // No workspace field — the daemon resolves its active project root.
         // (An explicit path would 403 unless it is already a registered

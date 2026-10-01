@@ -25,6 +25,11 @@ export class Adapter {
   // as buildArgs but continuing the CLI's own stored conversation. Null means
   // the agent has no headless resume — the shell starts a fresh turn instead.
   buildContinueArgs(_options) { return null }
+  // Some CLIs never print a session id in their output stream (devin). After
+  // a successful turn the shell asks the adapter to locate the just-created
+  // conversation — a targeted resume beats a global "last session" flag that
+  // can silently attach to an unrelated conversation.
+  captureSessionId(_context) { return null }
   normalizeLine(_line, _state) { return [] }
   buildUserFrame(text) { return `${text}\n` }
 }
