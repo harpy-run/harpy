@@ -93,6 +93,16 @@ async function runAgentTurn(state, text) {
   const AdapterClass = state.adapters.get(state.agent)
   if (!AdapterClass) throw new Error(`no agent selected — /use <id>`)
   const adapter = new AdapterClass()
+  // Fresh conversations get the same persistent-memory context a daemon
+  // session would: .harpy/ scaffold + the MEMORY.md launch hint, so a bot
+  // chatting here and a team bot spawned via /team learn the same project.
+  // Resumed turns skip it — the conversation already carries the context.
+  if (state.fresh) {
+    const { ensureMemory, memoryPromptHint } = await import('./handoffs.js')
+    ensureMemory(state.cwd, 'owner')
+    const hint = memoryPromptHint(state.cwd, 'owner')
+    if (hint) text = `${hint}\n\n${text}`
+  }
   const args = state.fresh
     ? adapter.buildArgs({ prompt: text })
     : (adapter.buildContinueArgs({ prompt: text, sessionId: state.agentSession }) ?? adapter.buildArgs({ prompt: text }))
@@ -204,6 +214,7 @@ async function linkTeamSessions(link, name) {
 // palette prefills `/name ` instead of running them blindly.
 const PALETTE = [
   { name: 'agents', desc: 'list agent CLIs · /agents refresh re-probes' },
+  { name: 'memory', args: true, desc: 'persistent memory — on|off · digest on|off' },
   { name: 'use', args: true, desc: 'switch the chat agent' },
   { name: 'new', desc: 'fresh conversation' },
   { name: 'cwd', args: true, desc: 'working directory' },
@@ -307,6 +318,7 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
       print(table([
         [c.accent('chat'), ''],
         ['/agents', 'list agent CLIs — refresh re-probes'],
+        ['/memory [on|off]', 'workspace memory + auto-digest (default on)'],
         ['/use <id>', 'switch the chat agent (claude, codex, gemini, …)'],
         ['/new', 'start a fresh conversation (drops resume)'],
         ['/cwd [path]', 'show or change the working directory'],
@@ -328,6 +340,25 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
         ['/set <key> <value>', 'settings: port, workspace, agent, lang'],
         ['/settings', 'show cli settings'],
         ['/quit', 'leave the shell']
+      ]))
+    },
+
+    async memory(rest) {
+      if (!(await daemonUp())) return err(`daemon offline — /daemon start`)
+      const arg = String(rest).trim().toLowerCase()
+      if (arg === 'on' || arg === 'off' || arg === 'digest on' || arg === 'digest off') {
+        const [key, value] = arg.startsWith('digest') ? ['digest', arg.endsWith('on')] : ['memory', arg === 'on']
+        const prefs = await link.call('agent', 'saveMemoryPrefs', { [key]: value })
+        print(`  ${ok('✓')} ${key === 'memory' ? 'persistent memory' : 'memory digest'} ${value ? 'on' : 'off'}${key === 'memory' && !value ? ` — ${dim('.harpy/ wiped from reachable workspaces')}` : ''}`)
+        if (key === 'memory' && !value && prefs.digest) print(`  ${dim('digest stays on — it only runs when memory is on anyway')}`)
+        return
+      }
+      if (arg) return err('usage: /memory [on|off|digest on|digest off]')
+      const prefs = await link.call('agent', 'memoryPrefs', {})
+      print(table([
+        ['memory', prefs.memory ? ok('on') : warn('off'), dim('.harpy/MEMORY.md + AGENTS.md pointer + launch hint + handoffs')],
+        ['digest', prefs.digest ? ok('on') : warn('off'), dim('session-end CLI run distills durable facts into MEMORY.md')],
+        ['', '', dim('/memory off turns both off and wipes .harpy/ from reachable workspaces')]
       ]))
     },
 

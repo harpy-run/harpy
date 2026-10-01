@@ -27,6 +27,27 @@ Run these directly — they are plain non-interactive subcommands:
 - `harpy daemon status` — check the daemon is up (commands fail without it)
 - `harpy chat "<prompt>"` — one-shot question to the default agent
 
+## Persistent memory (on by default)
+
+Every workspace has `.harpy/MEMORY.md` — curated project memory shared by
+all bots — plus `.harpy/handoffs/` snapshots written when a session stops
+(newest first in `INDEX.md`). Bots get the memory contents in their launch
+prompt automatically; a finishing session's durable findings are distilled
+into MEMORY.md by a background digest. The owner toggles it in the shell
+with `/memory` — when it is off, do not try to recreate `.harpy/` files.
+
+## Working honestly
+
+- Report verified, not attempted — a bot's "done" means checked. When a
+  `/say` instruction lands, state what was actually verified.
+- A `say` message informs; it does not transfer ownership. The session that
+  did the work owns its handoff snapshot when it ends.
+- Decisions belong in MEMORY.md with their rationale — the next bot should
+  see *why*, not just *what*.
+- Before continuing earlier work, read the newest entry in
+  `.harpy/handoffs/INDEX.md` — it is the recap of what the last session did
+  and why it stopped.
+
 ## Rules
 
 - List before acting: `harpy team sessions` shows current members and ids —
