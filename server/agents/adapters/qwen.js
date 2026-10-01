@@ -8,8 +8,8 @@ export class QwenAdapter extends Adapter {
   static interactive = false
   static install = { command: 'npm install -g @qwen-code/qwen-code' }
 
-  buildTerminalArgs() { return [] }
-  buildResumeArgs() { return ['--resume'] }
+  buildTerminalArgs() { return ['--yolo'] }
+  buildResumeArgs() { return ['--resume', '--yolo'] }
   // Same gemini-family convention: --resume continues the stored session.
   buildContinueArgs({ prompt } = {}) { return ['-p', prompt || '', '--yolo', '--resume'] }
   // --yolo auto-approves tool calls so the headless digest can write MEMORY.md.

@@ -8,8 +8,8 @@ export class OpenCodeAdapter extends Adapter {
   static interactive = false
   static install = { command: 'npm install -g opencode-ai' }
 
-  buildTerminalArgs() { return [] }
-  buildResumeArgs() { return ['--continue'] }
+  buildTerminalArgs() { return ['--auto'] }
+  buildResumeArgs() { return ['--continue', '--auto'] }
   // `run -c` only resumes opencode's *last* session — the JSON stream carries
   // sessionID on every event, so follow-ups resume it by name instead of
   // gambling on whatever session happened most recently.

@@ -7,9 +7,9 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import readline from 'node:readline'
 import { spawn } from 'node:child_process'
 import { ask, c, canOpenBrowser, choose, toggleMenu } from './cli-ui.js'
+import { BoxedInput } from './cli-input.js'
 import { readCliConfig, resolvePort, writeCliConfig } from './cli-config.js'
 import { cliLang, translator } from './cli-i18n.js'
 import { config, VERSION } from './config.js'
@@ -358,16 +358,16 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
 
   for (const line of sessionCard(state, link, port)) console.log(line)
 
-  // The rl instance is rebuilt after /join (raw-mode passthrough fights
-  // readline's own keypress handling) — `rebuilding` keeps close from
-  // tearing the shell down with it.
-  let rl = null
+  // The input is parked after /join (raw-mode passthrough fights the
+  // editor's keypress handling) — `rebuilding` keeps that dance quiet.
+  let input = null
+  const inputHistory = []
   let rebuilding = false
   let rebuiltThisTurn = false
   let shellDone = null
   const shellClosed = new Promise((resolve) => { shellDone = resolve })
 
-  const setPrompt = () => rl?.setPrompt(`${state.agent || 'harpy'} › `)
+  const setPrompt = () => { if (input?.active && input?.drawn) input.render() }
 
   const sessions = () => linkSessions(link)
   const findSession = (ref) => linkFindSession(link, ref)
@@ -405,47 +405,28 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
     return `  ${segs.join(dim('  ·  '))}`
   }
 
-  // Second reserved row — the input's context strip: who's chatting, where,
-  // and the key hints, right-aligned. Together with the agent strip above it
-  // this frames the input like a dedicated editor field.
-  const hintLine = () => {
-    const cols = process.stdout.columns || 80
-    const left = `  ${state.agent || 'harpy'} · ${trunc(state.cwd, 30)}`
-    const right = ` ${t('shHints')} `
-    const padW = Math.max(2, cols - stripAnsi(left).length - stripAnsi(right).length)
-    return `${dim(left)}${' '.repeat(padW)}${dim(right)}`
-  }
-
-  const statusBlock = () => `${statusLine()}\n${hintLine()}`
-
   const drawStatus = () => {
-    if (!promptVisible || paletteOpen || rebuilding) return
-    process.stdout.write(`\x1b[s\x1b[2A\r\x1b[2K${statusLine()}\n\x1b[2K${hintLine()}\x1b[u`)
+    if (!promptVisible || rebuilding) return
+    input?.paintStatus(statusLine())
   }
 
   const showPrompt = () => {
-    if (!rl) return
-    process.stdout.write(`${statusBlock()}\n`)
-    promptVisible = true
-    rl.prompt()
+    if (!input) return
+    promptVisible = input.tty
+    input.show()
   }
 
-  // Command/push output must never splice into a live input line — wipe the
-  // prompt row, print, re-glue status + prompt below it so the stack is
-  // always [output…][status][context][input]. _refreshLine is node's own
-  // prompt+line re-render; it keeps whatever the user had typed.
+  // Command/push output must never splice into a live input box — the editor
+  // wipes the whole block, prints, and re-glues [status][box][context] under
+  // it with the typed text and cursor position intact.
   const print = (s) => {
-    if (promptVisible && rl && !rebuilding && !paletteOpen) {
-      process.stdout.write(`\r\x1b[2K${s}\n${statusBlock()}\n`)
-      rl._refreshLine?.()
-    } else {
-      process.stdout.write(`${s}\n`)
-    }
+    if (promptVisible && input && !rebuilding) input.reprint(s)
+    else process.stdout.write(`${s}\n`)
   }
   const err = (s) => print(`  ${warn('!')} ${s}`)
 
   const pollSessions = async () => {
-    if (!link.ws || rebuilding || paletteOpen) return
+    if (!link.ws || rebuilding) return
     try { daemonSessions = await linkSessions(link); drawStatus() } catch { void 0 }
   }
   const pollTimer = setInterval(pollSessions, 2_500)
@@ -773,10 +754,10 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
       }
       if (!session) return err(`no session or team '${ref}'`)
       print(`  ${dim(`attached to ${session.sessionId} — Ctrl-] detaches, output is the live terminal`)}`)
-      // Hand stdin raw to the session PTY: closing rl detaches its keypress
-      // plumbing so keystrokes go only where they should.
+      // Hand stdin raw to the session PTY: stopping the input detaches its
+      // keypress plumbing so keystrokes go only where they should.
       rebuilding = true
-      rl.close()
+      input.stop()
       const onPush = (ch, ev, data) => {
         if (ch === 'agent' && ev === 'session' && data?.sessionId === session.sessionId && data.type === 'data') {
           process.stdout.write(data.data)
@@ -798,7 +779,7 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
       link.push = null
       try { await link.call('agent', 'unwatch', { sessionId: session.sessionId }) } catch { void 0 }
       print(`\n  ${dim('detached — session keeps running in the daemon')}`)
-      rl = makeRl()
+      input.start()
       showPrompt()
       rebuilding = false
       rebuiltThisTurn = true
@@ -870,14 +851,14 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
       const info = await checkForUpdate()
       if (!info.updateAvailable) { print(`  ${ok('✓')} already on ${info.current}`); return }
       print(`  ${c.accent('→')} v${info.latest} — updating (daemon restarts, this shell survives)`)
-      rl.pause()
+      input?.stop()
       try {
         const result = await applyUpdate({ restartDaemon: true })
         print(`  ${ok('✓')} ${result.steps.join(', ')}`)
         link.ws = null
         await daemonUp()
       } catch (error) { err(error.message) }
-      rl.resume()
+      input?.start()
       showPrompt()
     },
 
@@ -913,7 +894,7 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
         const [name, ...rest] = text.slice(1).split(/\s+/)
         const command = commands[name]
         const out = command ? await command.call(commands, rest.join(' ')) : err(`unknown command /${name} — /help`)
-        if (out === 'quit') { markQuit(); rl.close(); return }
+        if (out === 'quit') { markQuit(); input.finish(null); return }
       } else {
         if (state.busy) print(`  ${dim('agent is still working — Ctrl-C cancels the turn')}`)
         else {
@@ -927,7 +908,7 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
           const spinner = setInterval(() => {
             if (state.wroteOutput || !state.busy) return
             const el = Math.floor((Date.now() - startedAt) / 1000)
-            process.stdout.write(`\r\x1b[2K  ${c.accent(spinChar())} ${state.agent} ${dim(`${t('shThinking')}${el ? ` ${el}s ·` : ''} ctrl-c cancels`)}`)
+            process.stdout.write(`\r\x1b[2K  ${c.accent(spinChar())} ${state.agent} ${dim(`${t('shThinking')}${el ? ` ${el}s ·` : ''} ${t('shCancels')}`)}`)
           }, 120)
           try { await runAgentTurn(state, text) } catch (error) { err(error.message || String(error)) }
           clearInterval(spinner)
@@ -938,7 +919,7 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
     } catch (error) {
       err(error.message || String(error))
     }
-    // /join rebuilt rl mid-command — it already prompted.
+    // /join re-parked the input mid-command — it already prompted.
     if (rebuiltThisTurn) { rebuiltThisTurn = false; return }
     try { showPrompt() } catch { void 0 }
   }
@@ -963,75 +944,8 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
     }
     draining = false
   }
-  // Detect quit inside onLine via rl close — the drain loop then stops.
+  // Detect quit inside onLine via input finish — the drain loop then stops.
   const markQuit = () => { quitSeen = true }
-
-  // `/` on an empty prompt opens the command palette — a raw-mode overlay
-  // that filters as you type. Enter runs the pick straight away; commands
-  // that take args instead prefill the prompt (`/team ` stays editable).
-  // Esc cancels. rl is closed for the duration — same trick /join uses.
-  let paletteOpen = false
-  async function openPalette() {
-    paletteOpen = true
-    rebuilding = true
-    promptVisible = false
-    const old = rl
-    rl = null
-    old.close()
-    const stdin = process.stdin
-    const out = process.stdout
-    stdin.setRawMode(true)
-    stdin.resume()
-    let filter = ''
-    let sel = 0
-    let shown = 0
-    let list = []
-    const draw = () => {
-      if (shown) out.write(`\x1b[${shown}A\x1b[0J`) // back to row 1, wipe block
-      list = PALETTE.filter((p) => p.name.startsWith(filter))
-      if (sel >= list.length) sel = Math.max(0, list.length - 1)
-      // Show every entry the screen can hold — a hard 9-row crop used to hide
-      // half the commands. The window follows the selection when the list is
-      // taller than the terminal.
-      const maxRows = Math.max(5, (out.rows || 24) - 6)
-      const top = Math.min(Math.max(0, sel - maxRows + 1), Math.max(0, list.length - maxRows))
-      const lines = [`  ${c.accent('›')} /${filter}`, '']
-      for (const [row, p] of list.slice(top, top + maxRows).entries()) {
-        const i = top + row
-        const line = `/${p.name}${p.args ? ' …' : ''} ${dim(p.desc)}`
-        lines.push(i === sel ? `    ${c.accent('›')} ${c.bold(line)}` : `      ${line}`)
-      }
-      if (top + maxRows < list.length) lines.push(`      ${dim(`… ${list.length - top - maxRows} more below ↓`)}`)
-      if (!list.length) lines.push(`      ${dim('no match')}`)
-      out.write(lines.join('\n') + '\n')
-      shown = lines.length
-    }
-    out.write('\x1b[2A\r\x1b[0J') // erase the status+context rows + the `agent › /` prompt line
-    draw()
-    const picked = await new Promise((resolve) => {
-      const done = (v) => { stdin.removeListener('keypress', onKey); resolve(v) }
-      const onKey = (ch, key = {}) => {
-        if (key.name === 'return') return done(list[sel] || null)
-        if (key.name === 'escape' || (key.ctrl && key.name === 'c')) return done(null)
-        if (key.name === 'up') sel = Math.max(0, sel - 1)
-        else if (key.name === 'down') sel = Math.min(Math.max(0, list.length - 1), sel + 1)
-        else if (key.name === 'backspace') { filter = filter.slice(0, -1); sel = 0 }
-        else if (ch && ch.length === 1 && /[a-z0-9_-]/i.test(ch) && !key.ctrl && !key.meta) { filter += ch; sel = 0 }
-        else return
-        draw()
-      }
-      stdin.on('keypress', onKey)
-    })
-    stdin.setRawMode(false)
-    out.write(`\x1b[${shown}A\x1b[0J`) // erase the palette block
-    rl = makeRl()
-    showPrompt()
-    rebuilding = false
-    paletteOpen = false
-    if (!picked) return
-    if (picked.args) rl.write(`/${picked.name} `)
-    else enqueue(`/${picked.name}`)
-  }
 
   // Tab on an empty prompt — claude-code-style fleet overlay. A live, raw-mode
   // table of every agent session: animated dot on working sessions, solid on
@@ -1043,9 +957,7 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
     fleetOpen = true
     rebuilding = true
     promptVisible = false
-    const old = rl
-    rl = null
-    old.close()
+    input.stop()
     const stdin = process.stdin
     const out = process.stdout
     stdin.setRawMode(true)
@@ -1104,7 +1016,7 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
     clearInterval(animInt)
     stdin.setRawMode(false)
     out.write(`\x1b[${shown}A\x1b[0J`)
-    rl = makeRl()
+    input.start()
     showPrompt()
     rebuilding = false
     fleetOpen = false
@@ -1118,35 +1030,34 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
       state.cancelled = true
       try { state.child.kill('SIGINT') } catch { void 0 }
       print(`\n  ${dim('turn cancelled')}`)
-    } else {
-      rl?.close()
     }
   }
 
-  function makeRl() {
-    const next = readline.createInterface({
-      input: process.stdin,
-      output: process.stdout,
-      prompt: `${state.agent || 'harpy'} › `,
-      historySize: 200,
-      terminal: true
+  function makeInput() {
+    const next = new BoxedInput({
+      agent: () => state.agent || 'harpy',
+      cwd: () => state.cwd,
+      t,
+      history: inputHistory,
+      statusRow: statusLine,
+      menuItems: (buf) => PALETTE.filter((p) => p.name.startsWith(buf.slice(1))),
+      onLine: enqueue,
+      onClose: () => { if (!rebuilding) shellDone() },
+      onSigint,
+      onTabEmpty: () => { if (!fleetOpen && !draining && !state.busy) void openFleet() }
     })
-    next.on('line', enqueue)
-    next.on('SIGINT', onSigint)
-    next.on('close', () => { if (!rebuilding) shellDone() })
+    next.start()
     return next
   }
 
   // Guided "new bot" form — bare /team walks through it instead of making
   // anyone memorize `/team up <name> <agent> [prompt]`. The shell readline
-  // is parked like openPalette does so ask()/choose() can own the terminal,
+  // is parked like the fleet overlay does so ask()/choose() own the terminal,
   // then control comes back. `default` is the standing team so casual use
   // never touches namespaces.
   async function teamWizard() {
     rebuilding = true
-    const old = rl
-    rl = null
-    old.close()
+    input.stop()
     try {
       print('')
       const name = (await ask('team', 'default')) || 'default'
@@ -1161,34 +1072,14 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
     } catch (e) {
       print(`  ${warn('!')} ${e.message}`)
     } finally {
-      rl = makeRl()
+      input.start()
       showPrompt()
       rebuilding = false
     }
   }
 
-  rl = makeRl()
+  input = makeInput()
   showPrompt()
-
-  // '/' on an empty prompt opens the command palette. Punctuation arrives
-  // with an undefined key.name — the character itself is the match. The
-  // listener lives on stdin so it survives rl rebuilds after /join, and
-  // setImmediate lets rl consume the keystroke first regardless of the
-  // listener order a rebuilt rl leaves behind.
-  process.stdin.on('keypress', (ch, key = {}) => {
-    setImmediate(() => {
-      // eslint-disable-next-line no-control-regex
-      const clean = (s) => (s || '').replace(/^[\x00-\x1f\x7f]+/, '')
-      // Tab on an empty prompt opens the live agent overlay — the fleet's
-      // who/what/state strip claude-code-style, without touching the chat.
-      if ((key.name === 'tab' || ch === '\t') && rl && !paletteOpen && !fleetOpen && !draining && !state.busy && clean(rl.line) === '') {
-        return void openFleet()
-      }
-      // '/' on an empty prompt opens the command palette. Punctuation arrives
-      // with an undefined key.name — the character itself is the match.
-      if (ch === '/' && !key.ctrl && !key.meta && rl && !paletteOpen && !draining && clean(rl.line) === '/') void openPalette()
-    })
-  })
 
   await shellClosed
   clearInterval(pollTimer)

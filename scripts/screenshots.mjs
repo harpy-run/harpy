@@ -131,8 +131,10 @@ const scenes = {
     [['    • API keys   — hp_… issued via /api/auth/keys, revoked per-user']],
     [['']],
     [['  ⠋ ', 'ok'], ['s_148 claude — review PRs', 'fg'], ['   ·   ', 'dim'], ['○', 'dim'], [' 1 sleeping', 'fg']],
-    [['  devin · ~/src/harpy', 'dim'], ['                / commands · tab agents · ^C cancel ', 'dim']],
-    ...P('devin', [['/exit', 'fg']]),
+    [['  ╭' + '─'.repeat(56) + '╮', 'border']],
+    [['  │', 'border'], [' › /exit', 'fg'], [' '.repeat(50), 'fg'], ['│', 'border']],
+    [['  ╰' + '─'.repeat(56) + '╯', 'border']],
+    [['  devin · ~/src/harpy', 'dim'], ['         ↑↓ history · tab agents · ^C quit ', 'dim']],
     [['  bye', 'dim']],
     [['']]
   ] },

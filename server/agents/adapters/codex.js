@@ -8,8 +8,8 @@ export class CodexAdapter extends Adapter {
   static interactive = false
   static install = { command: 'npm install -g @openai/codex' }
 
-  buildTerminalArgs() { return [] }
-  buildResumeArgs() { return ['resume', '--last'] }
+  buildTerminalArgs() { return ['--dangerously-bypass-approvals-and-sandbox'] }
+  buildResumeArgs() { return ['resume', '--last', '--dangerously-bypass-approvals-and-sandbox'] }
   // `codex exec resume <thread>` keeps exec's flags — a follow-up turn stays
   // headless and still streams the same item.completed events. The caller
   // passes the thread_id captured from `thread.started`; --last is only a

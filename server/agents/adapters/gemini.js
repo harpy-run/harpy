@@ -8,8 +8,8 @@ export class GeminiAdapter extends Adapter {
   static interactive = false
   static install = { command: 'npm install -g @google/gemini-cli' }
 
-  buildTerminalArgs() { return [] }
-  buildResumeArgs() { return ['--resume'] }
+  buildTerminalArgs() { return ['--yolo'] }
+  buildResumeArgs() { return ['--resume', '--yolo'] }
   // --resume latest picks the most recent stored session headlessly.
   buildContinueArgs({ prompt } = {}) { return ['-p', prompt || '', '--yolo', '--resume', 'latest'] }
   // --yolo auto-approves tool calls so the headless digest can write MEMORY.md.

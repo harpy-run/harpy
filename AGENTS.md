@@ -146,16 +146,23 @@ backend first, then `node scripts/smoke.mjs`.
   (broadcast), `/peek` (history), `/join` (raw passthrough, Ctrl-] detaches),
   `/resume` (wake a sleeping session and attach), `/sessions` (grouped by
   working/idle/sleeping), `/status`, `/daemon`, `/use`, `/cwd`, `/new`,
-  `/update`, `/open`, `/set`. The prompt row carries a live status line above
-  it — daemon sessions are polled every ~2.5s and the row is redrawn in place
-  (save-cursor → up → clear → restore) with animated spinner dots on working
-  sessions, solid on idle, hollow on sleeping; `session.prompt` (the launch
-  task, ≤160 chars, persisted in `agent-sessions.json`) is each session's
-  purpose. **Tab** on an empty prompt opens the fleet overlay (live list,
-  Enter attaches, `w` wakes, `r` removes, esc backs out). Command output never
-  splices into a live input line — `print()` wipes the prompt row, prints,
-  re-glues status+prompt via readline's `_refreshLine`, and a "thinking…"
-  spinner rewrites one row until the agent's first output byte arrives. The
+  `/update`, `/open`, `/set`. `harpy-team` is a second bin name for the same
+  `server/cli.js` — argv[1] basename detection skips the launcher and opens
+  the shell directly; the web "Harpy Team" terminal runs `harpy-team ||
+  harpy`. The input is `server/cli-input.js` `BoxedInput` — a raw-mode line
+  editor that draws the prompt inside a rounded box: live status strip above
+  (daemon sessions polled ~2.5s, animated spinner dot = working, `●` idle,
+  `○` sleeping, `session.prompt` = purpose), context+hint row below
+  (agent · cwd, localized via `cli-i18n` sh* keys), inline `/` command
+  suggestions under the box (Enter runs no-arg picks, args commands stay
+  editable, Tab completes, esc dismisses, ↑↓ = history), ^C clears/^C or ^D
+  empty quits. Enter freezes the frame into the transcript and the editor
+  goes frozen — only ^C reaches `onSigint` while a turn runs. Overlays park
+  it via `stop()`/`start()` (same object's history survives). **Tab** on an
+  empty buffer opens the fleet overlay (live list, Enter attaches, `w`
+  wakes, `r` removes, esc backs out). Command output goes through `print()`
+  → `input.reprint()` which wipes the block, prints, re-glues; a localized
+  "thinking…" spinner row runs until the agent's first output byte. The
   same ops are scriptable as `harpy team ls|up|say|rm|down|sessions`
   (`--port N` supported) — the surface agent CLIs drive;
   `server/agent-skills.js` installs `skills/harpy/SKILL.md` onto

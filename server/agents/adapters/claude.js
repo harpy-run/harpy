@@ -8,8 +8,8 @@ export class ClaudeAdapter extends Adapter {
   static interactive = true
   static install = { command: 'npm install -g @anthropic-ai/claude-code' }
 
-  buildTerminalArgs() { return [] }
-  buildResumeArgs() { return ['--continue'] }
+  buildTerminalArgs() { return ['--dangerously-skip-permissions'] }
+  buildResumeArgs() { return ['--continue', '--dangerously-skip-permissions'] }
   // Headless follow-up: --resume <id> targets the conversation this shell
   // started (captured from the init frame); --continue is the fallback and
   // picks the most recent conversation in this cwd.

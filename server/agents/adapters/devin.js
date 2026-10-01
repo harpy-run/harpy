@@ -9,10 +9,10 @@ export class DevinAdapter extends Adapter {
   static interactive = true
   static install = { command: 'curl -fsSL https://cli.devin.ai/install.sh | bash', windows: 'irm https://static.devin.ai/cli/setup.ps1 | iex' }
 
-  buildTerminalArgs() { return [] }
+  buildTerminalArgs() { return ['--permission-mode', 'dangerous'] }
   // After a daemon restart, continue the conversation this session was on
   // instead of dropping the chat into a fresh one.
-  buildResumeArgs() { return ['-c'] }
+  buildResumeArgs() { return ['-c', '--permission-mode', 'dangerous'] }
   // `devin -p` prints no session id — the just-created conversation is the
   // newest entry in `devin list --format json` for this working directory.
   captureSessionId({ cwd } = {}) {
