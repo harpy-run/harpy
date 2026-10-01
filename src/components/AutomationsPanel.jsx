@@ -228,7 +228,9 @@ function AutomationEditor({ item, onClose, onSaved, wsPath }) {
     }
   }
 
-  const agentOptions = agents.length ? agents : [{ id: 'claude' }, { id: 'codex' }, { id: 'devin' }, { id: 'gemini' }, { id: 'qwen' }, { id: 'opencode' }, { id: 'grok' }]
+  // The built-in `harpy` shell is an interactive REPL — an automation run
+  // would spawn it and never exit, so it stays out of the picker.
+  const agentOptions = agents.length ? agents.filter((agent) => agent.id !== 'harpy') : [{ id: 'claude' }, { id: 'codex' }, { id: 'devin' }, { id: 'gemini' }, { id: 'qwen' }, { id: 'opencode' }, { id: 'grok' }]
   const triggers = [
     { value: 'fs', icon: FileCode, label: t('automation.when.fs'), hint: t('automation.whenHint.fs') },
     { value: 'cron', icon: Clock, label: t('automation.when.cron'), hint: t('automation.whenHint.cron') },

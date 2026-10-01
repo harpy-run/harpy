@@ -242,7 +242,11 @@ async function spawnTerm(session, args) {
     name: 'xterm-256color',
     ...session.size,
     cwd: session.state.cwd,
-    env: await enhancedEnv({ TERM: 'xterm-256color', COLORTERM: 'truecolor', ...(cliEnvFor(session.owner) || {}) })
+    // HARPY_HOME points the child at the daemon's real data dir so the
+    // bundled shell — and member sessions with a redirected private HOME —
+    // can reach cli.key. cli-env may still override it; built-in adapters
+    // need the true value, so theirs always wins.
+    env: await enhancedEnv({ TERM: 'xterm-256color', COLORTERM: 'truecolor', HARPY_HOME: config.dataDir, ...(cliEnvFor(session.owner) || {}), ...(AdapterClass.builtin ? { HARPY_HOME: config.dataDir } : {}) })
   })
   session.term = term
   term.onData((data) => emit(session, { type: 'data', data }))
@@ -503,7 +507,10 @@ export async function startRunner(ctx, { agent, prompt = '', cwd, workspace, col
   ensureMemory(requestedWorkspace, sessionOwner)
   // A launch prompt is the only channel guaranteed to reach every CLI —
   // interactive sessions with no prompt get the pointer via AGENTS.md.
-  const memoryContext = memoryPromptHint(requestedWorkspace, sessionOwner)
+  // Built-in adapters are the shell itself: it already knows the .harpy
+  // context, so injecting the memory hint would just type a blob into its
+  // prompt box.
+  const memoryContext = AdapterClass.builtin ? '' : memoryPromptHint(requestedWorkspace, sessionOwner)
   const initialPrompt = [memoryContext, prompt].filter(Boolean).join('\n\n')
   const index = nextSessionIndex(ctx, agent, requestedWorkspace)
   const session = {

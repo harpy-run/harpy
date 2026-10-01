@@ -6,9 +6,10 @@ import { GeminiAdapter } from './gemini.js'
 import { QwenAdapter } from './qwen.js'
 import { OpenCodeAdapter } from './opencode.js'
 import { GrokAdapter } from './grok.js'
+import { HarpyAdapter } from './harpy.js'
 
 export function registerAllAdapters() {
-  for (const AdapterClass of [ClaudeAdapter, CodexAdapter, DevinAdapter, GeminiAdapter, QwenAdapter, OpenCodeAdapter, GrokAdapter]) {
+  for (const AdapterClass of [HarpyAdapter, ClaudeAdapter, CodexAdapter, DevinAdapter, GeminiAdapter, QwenAdapter, OpenCodeAdapter, GrokAdapter]) {
     registerAdapter(AdapterClass)
   }
 }

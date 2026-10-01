@@ -72,7 +72,7 @@ backend first, then `node scripts/smoke.mjs`.
 
 - `smoke.mjs` — `BASE` defaults to `http://localhost:3001`. Performs first-run
   setup itself using `HARPY_SMOKE_PASSWORD` (default `secret123`). Asserts the
-  WS `agent.agents` reply has exactly **7** adapters — keep this in sync if you
+  WS `agent.agents` reply has exactly **8** adapters — keep this in sync if you
   add/remove an adapter in `server/agents/adapters/`.
 - `agent-terminal-smoke.mjs` — `BASE` defaults to `http://127.0.0.1:3231`
   (different port — set `BASE` or run a second server on 3231). Requires at least
@@ -151,8 +151,11 @@ backend first, then `node scripts/smoke.mjs`.
   working/idle/sleeping), `/status`, `/daemon`, `/use`, `/cwd`, `/new`,
   `/update`, `/open`, `/set`. `harpy-team` is a second bin name for the same
   `server/cli.js` — argv[1] basename detection skips the launcher and opens
-  the shell directly; the web "Harpy Team" terminal runs `harpy-team ||
-  harpy`. The input is `server/cli-input.js` `BoxedInput` — a raw-mode line
+  the shell directly; the web "Harpy Team" picker entry spawns it as a
+  built-in agent session (`node cli.js chat` via the `harpy` adapter), so it
+  lives in the agent terminal alongside codex/devin sessions — selectable,
+  peekable, joinable — never the bottom pty panel. The input is
+  `server/cli-input.js` `BoxedInput` — a raw-mode line
   editor that draws the prompt inside a rounded box: live status strip above
   (daemon sessions polled ~2.5s, animated spinner dot = working, `●` idle,
   `○` sleeping, `session.prompt` = purpose), context+hint row below
@@ -188,12 +191,16 @@ backend first, then `node scripts/smoke.mjs`.
 
 ## Agent adapters
 
-Seven adapters live in `server/agents/adapters/`: `claude`, `codex`, `devin`,
-`gemini`, `qwen`, `opencode`, `grok`. Each wraps an external CLI
+Eight adapters live in `server/agents/adapters/`: `harpy` (the built-in
+shell — `static builtin = true`, `cli = process.execPath` + `cli.js chat`,
+never PATH-probed, always available, skipped by the shell's own `/use`
+listing, and spawned without the `.harpy` memory-hint injection), `claude`,
+`codex`, `devin`, `gemini`, `qwen`, `opencode`, `grok`. The rest wrap an
+external CLI
 detected via a PATH scan (`server/util/env.js` builds a service-friendly PATH
 from the login shell plus well-known dirs, also used for agent/pty spawn env);
-`available` is false if the binary is missing. Only `claude` and `devin` set
-`interactive: true`. `buildResumeArgs` re-spawns a daemon PTY session after a
+`available` is false if the binary is missing. `harpy`, `claude` and `devin`
+set `interactive: true`. `buildResumeArgs` re-spawns a daemon PTY session after a
 restart; `buildContinueArgs({prompt, sessionId})` is the shell's headless
 follow-up path — adapters that can target a conversation id (codex
 `thread.started`, claude `system/init`, opencode JSONL `sessionID`) resume it
@@ -209,8 +216,8 @@ PATH); `agent.agents` with `{ refresh: true }` forces a re-check (the shell
 exposes it as `/agents refresh` for CLIs installed after the first probe),
 the server
 re-probes hourly and broadcasts `agent.agents` when availability changes,
-and opening the new-session modal triggers a fresh check. Adding an
-8th requires updating `registerAllAdapters` **and** the `agents.length !== 7`
+and opening the new-session modal triggers a fresh check. Adding a
+9th requires updating `registerAllAdapters` **and** the `agents.length !== 8`
 assertion in `scripts/smoke.mjs`.
 
 ## Auth & config

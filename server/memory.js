@@ -214,12 +214,14 @@ export async function runMemoryDigest({ agent, workspace, owner, ownerName, hand
   const order = [agent]
   try {
     for (const info of await listAgents()) {
-      if (info?.id && info.available && !order.includes(info.id)) order.push(info.id)
+      // Built-in adapters (the harpy shell itself) can't answer a digest —
+      // `harpy chat <prompt>` would nest a whole REPL just to reach a CLI.
+      if (info?.id && info.available && !getAdapter(info.id)?.builtin && !order.includes(info.id)) order.push(info.id)
     }
   } catch { /* availability list is advisory — the session agent still runs */ }
 
   const candidates = order
-    .map((id) => ({ id, run: digestArgsFor(id, prompt) }))
+    .map((id) => ({ id, run: getAdapter(id)?.builtin ? null : digestArgsFor(id, prompt) }))
     .filter((entry) => entry.run)
     .slice(0, DIGEST_MAX_CANDIDATES)
 

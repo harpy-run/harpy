@@ -93,10 +93,12 @@ export async function listAgents({ refresh = false } = {}) {
   const now = Date.now()
   let changed = false
   const agents = await Promise.all([...registry.values()].map(async (AdapterClass) => {
+    // Built-in adapters ship inside the package — no PATH probe, no cache
+    // entry, always available.
     const cached = store.get(AdapterClass.id)
     const fresh = !refresh && cached && now - cached.checkedAt < AVAILABILITY_TTL
-    const available = fresh ? cached.available : await commandAvailable(AdapterClass.cli, pathEnv)
-    if (!fresh) {
+    const available = AdapterClass.builtin ? true : (fresh ? cached.available : await commandAvailable(AdapterClass.cli, pathEnv))
+    if (!AdapterClass.builtin && !fresh) {
       store.set(AdapterClass.id, { available, checkedAt: now })
       changed = true
     }

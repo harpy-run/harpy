@@ -121,12 +121,12 @@ async function runAgentTurn(state, text) {
       process.stdout.write(chunk)
       wroteSinceBreak = true
     }
-    // Agent replies render as a framed block: an accent `●` + agent name opens
+    // Agent replies render as a framed block: an accent `✳` + agent name opens
     // the card, every content line sits under a `│` rail, tool/status lines
     // nest inside it, and the turn caps with `╰─`. Stream-safe — lines arrive
     // one at a time and each just hangs on the rail.
     const rail = `  ${c.accent('│')} `
-    const openBlock = () => { if (!msgOpen) { write(`  ${c.accent('●')} ${c.bold(AdapterClass.label || state.agent)}\n`); msgOpen = true } }
+    const openBlock = () => { if (!msgOpen) { write(`  ${c.accent('✳')} ${c.bold(AdapterClass.label || state.agent)}\n`); msgOpen = true } }
     const writeMessage = (text) => {
       openBlock()
       for (const l of text.split('\n')) if (l) write(`${rail}${l}\n`)
@@ -301,7 +301,7 @@ function sessionCard(state, link, port) {
     const v = value.length > maxV ? `…${value.slice(-Math.max(1, maxV - 1))}` : value
     return ` ${dim(label.padEnd(7))} ${label === 'cwd' ? dim(v) : v}${hint ? `  ${dim(hint)}` : ''}`
   }
-  const title = '›_ Harpy Team'
+  const title = '✳ Harpy Team'
   const titlePad = ' '.repeat(Math.max(1, colW - title.length - `v${VERSION}`.length - 2))
   const right = [
     ` ${c.accent(c.bold(title))}${titlePad} ${dim(`v${VERSION}`)}`,
@@ -329,7 +329,9 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
   const { registerAllAdapters } = await import('./agents/adapters/index.js')
   registerAllAdapters()
   const { getAdapter, listAgents } = await import('./agents/adapter.js')
-  const listed = await listAgents()
+  // The shell IS the harpy agent — listing it as a chat target would offer a
+  // shell-inside-a-shell. Its daemon sessions still surface via linkSessions.
+  const listed = (await listAgents()).filter((a) => a.id !== 'harpy')
 
   const state = {
     adapters: new Map(),
