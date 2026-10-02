@@ -51,7 +51,12 @@ differs from `package.json` — covers `npm i -g .`/git installs where
   daemon **and verifies `/api/health` answers before reporting success**. The
   restart reclaims the port by health identity — an untracked harpy holding it
   (foreground `harpy start`, stale-pidfile orphan) is killed via
-  `killPortHolder`, while a foreign app is still refused.
+  `killPortHolder`, while a foreign app is still refused. "No update
+  available" compares the CLI's own VERSION — the daemon process can still
+  serve an older build (out-of-band pull, a restart that never landed), so
+  `updateFlow` calls `restartStaleDaemon()`: when the health probe's version
+  differs, the remaining update IS the restart, and the UI's update banner
+  would otherwise loop forever.
   `server/update.js` holds the logic: a lockdir at
   `$HARPY_HOME/daemon/update.lock` serializes concurrent updaters and
   `update-state.json` records the phase (`install`/`restart`/`done`/`failed`)

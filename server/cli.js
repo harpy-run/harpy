@@ -553,10 +553,13 @@ async function updateFlow(options) {
   ])
   console.log('')
   if (!info.updateAvailable) {
-    // Tells a UI-triggered update (detached `harpy update --yes`) there's
-    // nothing to restart for — otherwise the client waits out its timeout.
-    writeUpdateState({ phase: 'done', version: info.current, skipped: true })
-    console.log(`  ${c.ok('✓')} ${t('updFresh')}`)
+    // "No update" compares the CLI's own VERSION — but the daemon process
+    // can still be running an older build (out-of-band pull, a previous
+    // restart that never landed). The remaining update IS the restart.
+    const { restartStaleDaemon } = await import('./update.js')
+    const restarted = await restartStaleDaemon()
+    writeUpdateState({ phase: 'done', version: info.current, skipped: !restarted })
+    console.log(`  ${c.ok('✓')} ${restarted ? `daemon restarted on v${info.current}` : t('updFresh')}`)
     return
   }
   console.log(`  ${c.accent('→')} ${c.bold(t('updAvail', { latest: info.latest }))}`)

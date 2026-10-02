@@ -238,3 +238,33 @@ export async function applyUpdate({ restartDaemon = true } = {}) {
     fs.rmSync(lock, { recursive: true, force: true })
   }
 }
+
+// The CLI's files can already be at the latest version while the daemon
+// PROCESS still serves an older one — a checkout pulled out-of-band, or a
+// previous install whose restart never landed. checkForUpdate() only
+// compares this file's VERSION to the registry, so without this probe the
+// updater reports "up to date" while the UI banner offers the same update
+// forever. Returns true when it restarted a stale daemon.
+export async function restartStaleDaemon() {
+  const { daemonStatus, healthProbe, stopDaemon, startDaemon } = await import('./daemon.js')
+  const status = await daemonStatus()
+  const port = status.listeningPort || status.port
+  if (!port) return false
+  const probe = await healthProbe(port)
+  if (!probe.harpy || !probe.version || compareVersions(probe.version, VERSION) === 0) return false
+  writeUpdateState({ phase: 'restart', from: probe.version, version: VERSION, port })
+  await stopDaemon()
+  await startDaemon({ port })
+  const deadline = Date.now() + 45_000
+  let next = await healthProbe(port)
+  while (!(next.harpy && next.version === VERSION) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 600))
+    const check = await daemonStatus({ port })
+    if (!check.running && !check.listening) await startDaemon({ port })
+    next = await healthProbe(port)
+  }
+  if (!(next.harpy && next.version === VERSION)) {
+    throw new Error('daemon did not come back on the new version — recover with `harpy daemon start`')
+  }
+  return true
+}
