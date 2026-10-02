@@ -67,8 +67,11 @@ export class BoxedInput {
 
   block(final = false) {
     const out = process.stdout
-    const cols = Math.min(out.columns || 80, 100)
-    const viewW = cols - 10
+    // Clamp the frame width at both ends: below ~10 columns viewW would go
+    // negative ('─'.repeat(-n) throws), which is how narrow splits once
+    // wedged the whole editor on the first keystroke.
+    const cols = Math.max(10, Math.min(out.columns || 80, 100))
+    const viewW = Math.max(4, cols - 10)
     const start = Math.max(0, this.cur - (viewW - 1))
     const body = this.buf
       ? this.buf.slice(start, start + viewW)
@@ -97,7 +100,7 @@ export class BoxedInput {
           : `      ${dim(label.padEnd(14))} ${dim(m.desc)}`, cols)
       })
     ]
-    return { lines, start }
+    return { lines: lines.map((l) => fit(l, cols)), start }
   }
 
   render(final = false) {
@@ -147,11 +150,11 @@ export class BoxedInput {
   // Repaint just the status strip above the box without moving the cursor.
   paintStatus(text) {
     if (!this.drawn || !this.active) return
-    const cols = Math.min(process.stdout.columns || 80, 100)
+    const cols = Math.max(10, Math.min(process.stdout.columns || 80, 100))
     // No \x1b[s/\x1b[u — the input row sits exactly 2 rows below the status
     // row, and explicit math behaves the same on terminals that never
     // implemented SCOSC/SCORC. Column is recomputed like render() does.
-    const viewW = cols - 10
+    const viewW = Math.max(4, cols - 10)
     const start = Math.max(0, this.cur - (viewW - 1))
     process.stdout.write(`\x1b[2A\r\x1b[2K${fit(text, cols)}\r\x1b[2B\x1b[${7 + this.cur - start}G`)
   }
@@ -197,6 +200,10 @@ export class BoxedInput {
     this.active = false
     this.frozen = false
     this.drawn = false
+    // Release the tty: a resumed raw stdin pins the event loop forever, which
+    // is exactly the "bye prints, prompt never returns" hang on exit. Code
+    // that still needs keys (fleet overlay, choose()) resumes it itself.
+    try { stdin.setRawMode(false); stdin.pause() } catch { void 0 }
   }
 
   insert(text) {

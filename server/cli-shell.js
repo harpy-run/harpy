@@ -81,7 +81,18 @@ export class DaemonLink {
     })
   }
 
-  close() { try { this.ws?.close() } catch { void 0 } }
+  close() {
+    this.closed = true
+    // Rejecting pending calls clears their 30s timeout timers — a live timer
+    // or a socket mid-close-handshake would pin the event loop after the
+    // shell already printed "bye".
+    for (const { reject } of this.pending.values()) { try { reject(new Error('link closed')) } catch { void 0 } }
+    this.pending.clear()
+    this.push = null
+    const ws = this.ws
+    this.ws = null
+    try { ws?.close() } catch { void 0 }
+  }
 }
 
 // --- agent chat turns ------------------------------------------------------
@@ -92,7 +103,7 @@ export class DaemonLink {
 
 async function runAgentTurn(state, text) {
   const AdapterClass = state.adapters.get(state.agent)
-  if (!AdapterClass) throw new Error(`no agent selected — /use <id>`)
+  if (!AdapterClass) throw new Error(`no agent selected — /use picks one, /agents lists installers`)
   const adapter = new AdapterClass()
   // Fresh conversations still scaffold .harpy/ + the AGENTS.md pointer —
   // the pointer is the memory channel; nothing is prepended to the prompt.
@@ -125,10 +136,19 @@ async function runAgentTurn(state, text) {
     // nest inside it, and the turn caps with `╰─`. Stream-safe — lines arrive
     // one at a time and each just hangs on the rail.
     const rail = `  ${c.accent('│')} `
+    const railW = stripAnsi(rail).length
     const openBlock = () => { if (!msgOpen) { write(`  ${c.accent('✳')} ${c.bold(AdapterClass.label || state.agent)}\n`); msgOpen = true } }
     const writeMessage = (text) => {
       openBlock()
-      for (const l of text.split('\n')) if (l) write(`${rail}${l}\n`)
+      // Wrap long reply lines to the terminal so continuation rows keep the
+      // rail — a raw wrapped row spills into the gutter and smears the frame,
+      // which is what made narrow terminals look "dağılmış".
+      const wrapW = Math.max(12, (process.stdout.columns || 80) - railW - 1)
+      for (const l of text.split('\n')) {
+        if (!l) continue
+        if (l.includes('\x1b') || l.length <= wrapW) { write(`${rail}${l}\n`); continue }
+        for (let i = 0; i < l.length; i += wrapW) write(`${rail}${l.slice(i, i + wrapW)}\n`)
+      }
     }
     child.stdout.on('data', (chunk) => {
       tail += chunk.toString('utf8')
@@ -199,7 +219,12 @@ function fmtAge(ts) {
 function table(rows) {
   if (!rows.length) return ''
   const widths = rows[0].map((_, i) => Math.max(...rows.map((row) => stripAnsi(String(row[i] ?? '')).length)))
-  return rows.map((row) => '  ' + row.map((cell, i) => String(cell ?? '').padEnd(widths[i])).join('  ').trimEnd()).join('\n')
+  const cols = Math.max(20, process.stdout.columns || 80)
+  // padEnd() would count ANSI escapes as characters and under-pad colored
+  // cells — pad on visible width, then fit() clips the row instead of
+  // letting it wrap and corrupt cursor math on narrow terminals.
+  const pad = (cell, w) => String(cell ?? '') + ' '.repeat(Math.max(0, w - stripAnsi(String(cell ?? '')).length))
+  return rows.map((row) => fit('  ' + row.map((cell, i) => pad(cell, widths[i])).join('  ').trimEnd(), cols)).join('\n')
 }
 
 function sessionTag(s) {
@@ -291,10 +316,14 @@ function sessionCard(state, link, port) {
   const width = Math.min(mark ? 76 : 66, cols - 4, Math.max(mark ? 64 : 38, (mark ? MARK_W : 0) + state.cwd.length + 16))
   const colW = width - (mark ? MARK_W + 6 : 0) - 4
   const row = mark
-    ? (markLine, cellText) =>
-      `  │ ${c.accent(markLine.padEnd(MARK_W))}  ${cellText}${' '.repeat(Math.max(0, colW + 2 - strip(cellText).length))} │`
-    : (_markLine, cellText) =>
-      `  │ ${cellText}${' '.repeat(Math.max(0, width - 2 - strip(cellText).length))} │`
+    ? (markLine, cellText) => {
+      const cell = fit(cellText, Math.max(1, colW + 2))
+      return `  │ ${c.accent(markLine.padEnd(MARK_W))}  ${cell}${' '.repeat(Math.max(0, colW + 2 - strip(cell).length))} │`
+    }
+    : (_markLine, cellText) => {
+      const cell = fit(cellText, Math.max(1, width - 2))
+      return `  │ ${cell}${' '.repeat(Math.max(0, width - 2 - strip(cell).length))} │`
+    }
   const info = (label, value, hint = '') => {
     const maxV = colW - 9 - (hint ? hint.length + 2 : 0)
     const v = value.length > maxV ? `…${value.slice(-Math.max(1, maxV - 1))}` : value
@@ -1065,12 +1094,19 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
       const sleeping = list.filter((s) => s.status === 'sleeping').length
       const w = (out.columns || 80) - 1
       const lines = [fit(`  ${c.bold(t('shAgents'))} ${dim(`— ${running} running · ${sleeping} sleeping`)}`, w), '']
-      for (const [i, s] of list.entries()) {
+      // Page the list to the terminal height — an overflowing redraw breaks
+      // the cursor-up math and smears the overlay on every poll.
+      const maxList = Math.max(1, (out.rows || 24) - 5) // header + blanks + footer + "… more"
+      const startIdx = Math.min(Math.max(0, sel - maxList + 1), Math.max(0, list.length - maxList))
+      const page = list.slice(startIdx, startIdx + maxList)
+      for (const [j, s] of page.entries()) {
+        const i = startIdx + j
         const working = s.status === 'running' && now - (s.lastActivityAt || s.startedAt || 0) < 10_000
         const mark = s.status === 'sleeping' ? dim('○') : working ? ok(spinChar()) : s.status === 'stopped' ? dim('◌') : ok('●')
         const row = `${mark} ${s.sessionId}  ${s.agent}${s.team ? ` · ${s.team}` : ''}  ${s.status}${s.prompt ? `  ${dim(trunc(s.prompt, 34))}` : ''}  ${dim(fmtAge(s.startedAt))}`
         lines.push(fit(i === sel ? `  ${c.accent('›')} ${c.bold(row)}` : `    ${row}`, w))
       }
+      if (list.length > page.length) lines.push(fit(`    ${dim(`… ${list.length - page.length} more`)}`, w))
       if (!list.length) lines.push(fit(`    ${dim(t('shNoSessions'))}`, w))
       lines.push('', fit(`  ${dim(t('shFleetKeys'))}`, w))
       out.write(lines.join('\n') + '\n')
@@ -1177,6 +1213,35 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
     }
   }
 
+  // Real SIGINT/SIGTERM still land while stdin is momentarily cooked (an
+  // ask() prompt) or when the daemon stops this session — restore the tty
+  // and leave; the default would drop a raw terminal or a half-drawn shell.
+  const onTermSignal = () => {
+    try { process.stdin.setRawMode?.(false); process.stdin.pause() } catch { void 0 }
+    process.exit(0)
+  }
+  process.on('SIGINT', onTermSignal)
+  process.on('SIGTERM', onTermSignal)
+
+  // First run with no saved agent preference: ask once which CLI this shell
+  // chats with. A probed binary is not a usable account — a claude CLI with
+  // no subscription is a worse default than one question, and the answer
+  // persists (cli.json) so it survives restarts; /use changes it anytime.
+  if (!agent && !readCliConfig().agent && state.listed.some((a) => a.available)) {
+    const picked = await choose(t('shPickAgent'), state.listed.map((a) => ({
+      value: a.id,
+      label: `${a.id} — ${a.label}`,
+      hint: a.available ? 'installed' : `not installed${a.install?.command ? ` — ${a.install.command}` : ''}`
+    })), { defaultValue: state.agent || undefined })
+    if (picked && picked !== 'back' && state.adapters.has(picked)) {
+      state.agent = picked
+      writeCliConfig({ agent: picked })
+      if (!state.listed.find((a) => a.id === picked)?.available) {
+        print(`  ${warn('!')} ${picked} is not installed — /agents lists the installer`)
+      }
+    }
+  }
+
   input = makeInput()
   showPrompt()
 
@@ -1185,6 +1250,17 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
   clearInterval(tickTimer)
   clearTimeout(firstPoll)
   print(`  ${dim('bye')}`)
+  // Deterministic teardown — the REPL holds a resumed raw stdin, pending
+  // link.call timeouts and a ws mid-close-handshake, any of which pins the
+  // event loop and leaves the terminal sitting on "bye" forever. Called from
+  // `harpy` (returns to the launcher) and `harpy-team`/`cli.js chat`
+  // (process exits once every handle is released) — so clean, don't exit.
+  try { input?.stop() } catch { void 0 }
+  try {
+    process.stdin.removeAllListeners('keypress')
+    process.stdin.setRawMode?.(false)
+    process.stdin.pause()
+  } catch { void 0 }
   link.close()
 }
 
