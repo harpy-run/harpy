@@ -94,19 +94,62 @@ async function ensureBinary(name, url) {
     return dest;
 }
 
-async function ensureBinaryTgz(name, url, member) {
+// zrok/cloudflared tarballs differ in member layout (./zrok vs zrok vs
+// nested dirs) — extract to a scratch dir and pick the binary out by name
+// instead of trusting a fixed member path.
+async function ensureBinaryTgz(name, url) {
     const dest = path.join(binDir(), name + exeExt);
     if (!fs.existsSync(dest)) {
         const tgz = dest + '.tgz';
         log(`downloading ${name} from ${url}`);
         await download(url, tgz);
+        const tmp = `${dest}.extract`;
+        fs.rmSync(tmp, { recursive: true, force: true });
+        fs.mkdirSync(tmp, { recursive: true, mode: 0o700 });
+        try {
+            execFileSync('tar', ['-xzf', tgz, '-C', tmp], { windowsHide: true });
+        } catch (error) {
+            fs.rmSync(tmp, { recursive: true, force: true });
+            fs.rmSync(tgz, { force: true });
+            throw error;
+        }
+        let found = null;
+        const wanted = new Set([name, `${name}.exe`]);
+        const walk = (dir) => {
+            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+                const full = path.join(dir, entry.name);
+                if (entry.isDirectory()) walk(full);
+                else if (!found && wanted.has(entry.name)) found = full;
+            }
+        };
+        walk(tmp);
+        if (!found) {
+            fs.rmSync(tmp, { recursive: true, force: true });
+            throw new Error(`${name} tarball did not contain a ${name} binary`);
+        }
         fs.mkdirSync(binDir(), { recursive: true, mode: 0o700 });
-        execFileSync('tar', ['-xzf', tgz, '-C', binDir(), member]);
+        fs.renameSync(found, dest);
+        fs.rmSync(tmp, { recursive: true, force: true });
         fs.rmSync(tgz, { force: true });
-        fs.chmodSync(dest, 0o755);
+        try { fs.chmodSync(dest, 0o755); } catch { /* mode bits are advisory on Windows */ }
     }
     verifyPinned(name, dest);
     return dest;
+}
+
+// GitHub asset names are often versioned (zrok_2.0.6_darwin_arm64.tar.gz), so
+// the `releases/latest/download/<name>` shorthand 404s — resolve the real
+// browser_download_url through the release API.
+async function githubLatestAssetUrl(repo, nameRe) {
+    const res = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
+        headers: { 'user-agent': `harpy/${VERSION}`, accept: 'application/json' },
+        signal: AbortSignal.timeout(15_000)
+    });
+    if (!res.ok) throw new Error(`github release lookup failed (HTTP ${res.status})`);
+    const data = await res.json();
+    const asset = (data.assets || []).find((a) => nameRe.test(String(a.name)));
+    if (!asset?.browser_download_url) throw new Error(`no matching asset in ${repo}'s latest release`);
+    return asset.browser_download_url;
 }
 
 /** Persistent ed25519 keypair used as the share identity (e.g. for sish relays). */
@@ -180,8 +223,13 @@ const PROVIDERS = {
         docs: null,
         fields: [],
         async build(_opts, { port }) {
-            const bin = await ensureBinary('cloudflared',
-                `https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-${plat}-${arch}${exeExt}`);
+            // Cloudflare ships darwin binaries ONLY as .tgz — the raw
+            // `cloudflared-darwin-<arch>` asset 404s on macOS.
+            const bin = process.platform === 'darwin'
+                ? await ensureBinaryTgz('cloudflared',
+                    `https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-${arch}.tgz`)
+                : await ensureBinary('cloudflared',
+                    `https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-${plat}-${arch}${exeExt}`);
             return {
                 cmd: bin,
                 args: ['tunnel', '--url', `http://127.0.0.1:${port}`, '--no-autoupdate'],
@@ -238,7 +286,7 @@ const PROVIDERS = {
         async build(opts, { port }) {
             if (!opts.authtoken) throw new Error('ngrok requires an authtoken');
             const bin = await ensureBinaryTgz('ngrok',
-                `https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-${plat}-${arch}.tgz`, 'ngrok');
+                `https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-${plat}-${arch}.tgz`);
             const args = ['http', String(port), '--authtoken', opts.authtoken, '--log=stdout', '--log-format=json'];
             if (opts.domain) {
                 const domain = String(opts.domain);
@@ -259,8 +307,9 @@ const PROVIDERS = {
         ],
         async build(opts, { port }) {
             if (!opts.token) throw new Error('zrok requires an enable token');
-            const bin = await ensureBinaryTgz('zrok',
-                `https://github.com/openziti/zrok/releases/latest/download/zrok_${plat}_${arch}.tar.gz`, './zrok');
+            const url = await githubLatestAssetUrl('openziti/zrok',
+                new RegExp(`^zrok_[\\d.]+_${plat}_${arch}\\.tar\\.gz$`));
+            const bin = await ensureBinaryTgz('zrok', url);
             try { execFileSync(bin, ['enable', opts.token], { stdio: 'pipe', timeout: 30000 }); } catch { /* already enabled */ }
             const args = ['share', 'public', '--headless', `http://127.0.0.1:${port}`];
             if (opts.name) args.push('--unique-name', opts.name);

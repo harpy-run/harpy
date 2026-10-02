@@ -118,6 +118,12 @@ The daemon must behave identically on linux/darwin/win32. Hard constraints:
   `git`, `tar`, `ssh-keygen`, `netstat`, `lsof`, `ps`, `taskkill`,
   `powershell`, `launchctl`, `systemctl` are the only allowed external
   tools, each behind its platform gate.
+- **Provider binary downloads must be verified per-platform.** GitHub
+  `releases/latest/download/<name>` only works for STABLE asset names —
+  versioned names (zrok) need the release API (`githubLatestAssetUrl`), and
+  some projects ship only archives on certain OSes (cloudflared is
+  `.tgz`-only on darwin). `ensureBinaryTgz` walks the tarball for the binary
+  rather than trusting a member path.
 
 ## Architecture boundaries
 
