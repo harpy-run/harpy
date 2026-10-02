@@ -215,11 +215,18 @@ The daemon must behave identically on linux/darwin/win32. Hard constraints:
   editable, Tab completes, esc dismisses, ↑↓ = history), ^C clears/^C or ^D
   empty quits. Enter freezes the frame into the transcript and the editor
   goes frozen — only ^C reaches `onSigint` while a turn runs. Overlays park
-  it via `stop()`/`start()` (same object's history survives). **Tab** on an
+  it via `stop()`/`start()` (same object's history survives — `stop()` also
+  pauses stdin and leaves raw mode, so every overlay/exit must re-resume or
+  no open handle keeps the process alive; the shell's teardown relies on
+  that plus `DaemonLink.close()` rejecting pending calls to avoid the
+  "prints bye, never exits" pin). **Tab** on an
   empty buffer opens the fleet overlay (live list, Enter attaches, `w`
   wakes, `r` removes, esc backs out). Command output goes through `print()`
   → `input.reprint()` which wipes the block, prints, re-glues; a localized
-  "thinking…" spinner row runs until the agent's first output byte. The
+  "thinking…" spinner row runs until the agent's first output byte. Every
+  shell-rendered row must be `fit()` to the terminal width and the fleet
+  overlay pages to terminal height — one wrapped row corrupts the
+  cursor-up redraw math. The
   same ops are scriptable as `harpy team ls|up|say|rm|down|sessions`
   (`--port N` supported) — the surface agent CLIs drive;
   `server/agent-skills.js` installs `skills/harpy/SKILL.md` onto
@@ -274,6 +281,17 @@ re-probes hourly and broadcasts `agent.agents` when availability changes,
 and opening the new-session modal triggers a fresh check. Adding a
 9th requires updating `registerAllAdapters` **and** the `agents.length !== 8`
 assertion in `scripts/smoke.mjs`.
+
+**Preferred agent.** `cli.json`'s `agent` key (written by `/use`, the
+first-run picker, or `harpy settings set agent`) is the operator's chosen
+chat CLI. `preferredAgentId()` in `server/agents/adapter.js` resolves it:
+saved pick when installed, else first available non-builtin. The shell's
+first run asks once via a `choose()` picker (an installed binary is not a
+subscribed account — never silently default to whichever CLI probed first),
+`agent.agents` marks it `preferred: true` for the web panel, and internal
+spawns resolve through it: an automation `.md` with no `agent:` field runs
+on the preferred agent, and the memory digest tries it right after the
+ended session's own CLI.
 
 ## Auth & config
 

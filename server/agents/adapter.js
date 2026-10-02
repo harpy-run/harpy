@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { config } from '../config.js'
+import { readCliConfig } from '../cli-config.js'
 import { enhancedPath, refreshEnhancedPath } from '../util/env.js'
 
 const registry = new Map()
@@ -117,4 +118,19 @@ export async function listAgents({ refresh = false } = {}) {
   }))
   if (changed) persistAvailability()
   return agents
+}
+
+// The operator's preferred chat agent: their cli.json pick when that CLI is
+// actually installed, else the first available adapter. Internal spawns
+// (automations, memory digest) resolve through this instead of hardcoding a
+// provider — a probed claude binary is not a subscribed account, and a
+// machine that only has devin installed should use devin. '' when nothing
+// external is installed.
+export async function preferredAgentId({ refresh = false } = {}) {
+  let listed = []
+  try { listed = await listAgents({ refresh }) } catch { listed = [] }
+  const usable = (a) => a.available && !getAdapter(a.id)?.builtin
+  const saved = readCliConfig().agent || ''
+  if (saved && listed.some((a) => a.id === saved && usable(a))) return saved
+  return listed.find(usable)?.id || ''
 }

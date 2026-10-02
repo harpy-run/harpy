@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
-import { getAdapter, listAgents } from './agents/adapter.js'
+import { getAdapter, listAgents, preferredAgentId } from './agents/adapter.js'
 import { config } from './config.js'
 import { enhancedEnv, resolveCommand, verbatimOpts } from './util/env.js'
 import { cliEnvFor } from './cli-env.js'
@@ -216,6 +216,10 @@ export async function runMemoryDigest({ agent, workspace, owner, ownerName, hand
 
   const order = [agent]
   try {
+    // The operator's configured agent outranks random leftovers in the
+    // candidate list — it is the CLI they actually have credentials for.
+    const preferred = await preferredAgentId()
+    if (preferred && !order.includes(preferred)) order.push(preferred)
     for (const info of await listAgents()) {
       // Built-in adapters (the harpy shell itself) can't answer a digest —
       // `harpy chat <prompt>` would nest a whole REPL just to reach a CLI.

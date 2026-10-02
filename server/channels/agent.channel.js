@@ -1,4 +1,4 @@
-import { listAgents } from '../agents/adapter.js'
+import { listAgents, preferredAgentId } from '../agents/adapter.js'
 import { ownerKey, requireAccess, requireSelfOrAdmin } from '../auth.js'
 import { httpError } from '../util/http.js'
 import { cliEnvInfo, saveCliEnv } from '../cli-env.js'
@@ -28,7 +28,12 @@ export const agentChannel = {
     agents: async (ctx, { refresh } = {}) => {
       const access = requireAccess(ctx)
       const agents = await listAgents({ refresh: !!refresh })
-      return access.agents ? agents.filter((agent) => access.agents.has(agent.id)) : agents
+      // The operator's configured pick rides the list so the UI and any
+      // remote surface preselect it instead of "first available" — the
+      // shell's /use writes the same cli.json key.
+      const preferred = await preferredAgentId()
+      const marked = agents.map((agent) => ({ ...agent, preferred: agent.id === preferred }))
+      return access.agents ? marked.filter((agent) => access.agents.has(agent.id)) : marked
     },
     start: (ctx, data = {}) => {
       const access = requireAccess(ctx)

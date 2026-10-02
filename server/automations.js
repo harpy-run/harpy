@@ -37,6 +37,7 @@ import { notifyWebhook } from './notify.js'
 import { listKnownWorkspaces } from './workspace.js'
 import { pinFsWatcher, unpinFsWatcher } from './channels/fs.channel.js'
 import { startRunner } from './agents/runner.js'
+import { preferredAgentId } from './agents/adapter.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -217,7 +218,10 @@ export function listAutomations(workspace) {
       agentFilter: scalar(meta.agentFilter),
       schedule: scalar(meta.schedule),
       gate: scalar(meta.gate),
-      agent: scalar(meta.agent, 'claude'),
+      // No hardcoded provider: an unset `agent:` resolves to the operator's
+      // configured/first-available agent at fire time (preferredAgentId) —
+      // baking 'claude' in made every automation fail on machines without it.
+      agent: scalar(meta.agent),
       isolated: meta.isolated === true || meta.isolated === 'true',
       cooldown: Math.max(0, Number(meta.cooldown) || 120),
       enabled: meta.enabled !== 'false',
@@ -379,7 +383,7 @@ export async function fireAutomation(workspace, slug, { trigger = 'manual', deta
   live.set(key, entry)
   try {
     const session = await startRunner(automationCtx(), {
-      agent: automation.agent,
+      agent: automation.agent || await preferredAgentId(),
       prompt,
       workspace: ws,
       cwd,

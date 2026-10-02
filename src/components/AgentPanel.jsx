@@ -444,7 +444,10 @@ export function AgentPanel({ workspacePath, paneId } = {}) {
       const available = list.filter((agent) => agent.available)
       if (activeSessionRef.current && !visibleSessions.some((session) => session.sessionId === activeSessionRef.current)) selectSession(visibleSessions[0]?.sessionId || '')
       if (!activeSessionRef.current && visibleSessions[0]) selectSession(visibleSessions[0].sessionId)
-      if (!activeAgent.value && available[0]) activeAgent.value = available[0].id
+      // The daemon marks the operator's configured agent (cli.json, /use)
+      // `preferred` — default to it over "first available" so the panel and
+      // the Harpy Team shell agree on which CLI owns the chat.
+      if (!activeAgent.value && available.length) activeAgent.value = (available.find((agent) => agent.preferred) || available[0]).id
       setError('')
     } catch (requestError) {
       setError(requestError.message)
