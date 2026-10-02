@@ -17,7 +17,11 @@ keep serving a stale `index.html`/`sw.js`. The service worker
 modal's reload purges Cache Storage first. `prepare`
 (`scripts/ensure-dist.mjs`) rebuilds `dist/` when its embedded version
 differs from `package.json` — covers `npm i -g .`/git installs where
-`prepack` never runs, so a stale bundle can't ship.
+`prepack` never runs, so a stale bundle can't ship. The `version` script
+chains ensure-dist for the same reason: a checkout that serves its own
+`dist/` (this repo included) must rebuild on every bump or the UI's
+`CURRENT_VERSION` stays behind the release and the update banner loops
+forever even though the daemon already runs the new version.
 
 ## Commands
 
