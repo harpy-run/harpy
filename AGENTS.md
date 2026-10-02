@@ -56,7 +56,11 @@ differs from `package.json` — covers `npm i -g .`/git installs where
   serve an older build (out-of-band pull, a restart that never landed), so
   `updateFlow` calls `restartStaleDaemon()`: when the health probe's version
   differs, the remaining update IS the restart, and the UI's update banner
-  would otherwise loop forever.
+  would otherwise loop forever. Under systemd the updater runs as its own
+  transient oneshot in the daemon's scope (`systemd-run --user` for a user
+  unit) — a system-scoped updater cannot reach `systemctl --user`, and a
+  detached fallback child would be reaped with the unit cgroup on `--collect`
+  (`startDaemon` refuses the fallback when `INVOCATION_ID` is set).
   `server/update.js` holds the logic: a lockdir at
   `$HARPY_HOME/daemon/update.lock` serializes concurrent updaters and
   `update-state.json` records the phase (`install`/`restart`/`done`/`failed`)

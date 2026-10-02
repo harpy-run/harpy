@@ -27,11 +27,26 @@ export const systemChannel = {
       const info = await checkForUpdate()
       return { ...info, mode: installMode() }
     },
-    updateApply: (ctx) => {
+    updateApply: async (ctx) => {
       requireAdmin(ctx)
       mkdirSync(config.dataDir, { recursive: true })
       if (process.env.INVOCATION_ID) {
+        // The transient updater unit must live in the SAME systemd manager as
+        // the daemon's unit. Without --user a user-managed daemon gets a
+        // system-scoped updater whose `systemctl --user` calls cannot reach
+        // the user bus — startDaemon then falls back to a detached child that
+        // the unit's cgroup teardown kills on --collect, leaving the port
+        // dead and the unit inactive.
+        const { systemdUnit } = await import('../daemon.js')
+        const userScope = (systemdUnit() || []).includes('--user')
+        const busEnv = userScope
+          ? [
+              '--setenv', `XDG_RUNTIME_DIR=${process.env.XDG_RUNTIME_DIR || `/run/user/${os.userInfo().uid}`}`,
+              ...(process.env.DBUS_SESSION_BUS_ADDRESS ? ['--setenv', `DBUS_SESSION_BUS_ADDRESS=${process.env.DBUS_SESSION_BUS_ADDRESS}`] : []),
+            ]
+          : []
         const child = spawn('systemd-run', [
+          ...(userScope ? ['--user'] : []),
           '--unit', `harpy-update-${Date.now()}`,
           '--service-type=oneshot',
           '--collect',
@@ -41,6 +56,7 @@ export const systemChannel = {
           '--setenv', `HOME=${os.homedir()}`,
           '--setenv', `PATH=${process.env.PATH || '/usr/bin:/bin'}`,
           '--setenv', `HARPY_HOME=${config.dataDir}`,
+          ...busEnv,
           process.execPath, cliPath, 'update', '--yes',
         ], { detached: true, stdio: 'ignore' })
         child.unref()

@@ -71,10 +71,14 @@ function processRunning(pid) {
 }
 
 // When a systemd unit already supervises the daemon, start/stop must go through
-// systemctl. Killing the pidfile pid directly races with Restart=on-failure,
+// systemctl. Killing the pidfile pid directly races with the unit's Restart=,
 // and spawning a detached child alongside the unit leaves two processes
 // fighting over the port — the loser lingers as an orphan.
-function systemdUnit() {
+// Which systemd manager owns the unit file: [] = system manager, ['--user'] =
+// the calling user's manager, null = no unit installed. Also used by
+// system.channel.js to give the detached updater the same scope — a
+// system-scoped transient unit cannot reach `systemctl --user`.
+export function systemdUnit() {
   if (process.platform !== 'linux') return null
   try { execFileSync('systemctl', ['--version'], { stdio: 'ignore' }) } catch { return null }
   if (fs.existsSync(LINUX_SYSTEM_UNIT)) return []
@@ -340,7 +344,16 @@ export async function startDaemon({ port = config.port, workspace } = {}) {
       execFileSync('systemctl', [...unit, 'start', SERVICE_NAME], { stdio: 'ignore' })
       const status = await waitForListening(normalizedPort)
       return { ...status, started: status.running || status.listening, message: status.listening ? 'daemon started' : 'daemon is starting; inspect the log if it does not come online' }
-    } catch { /* fall through to the detached spawn when systemctl fails */ }
+    } catch (error) {
+      // Inside a systemd-managed caller (INVOCATION_ID is set — e.g. the
+      // detached update unit) a detached child still lands in the caller's
+      // cgroup and is reaped when that unit is collected, so falling back
+      // would "start" a daemon that dies moments later. Report the failure
+      // instead; an interactive `harpy daemon start` keeps the fallback.
+      if (process.env.INVOCATION_ID) {
+        return { started: false, running: false, listening: false, message: `systemctl start failed: ${error?.message || error}` }
+      }
+    }
   }
 
   ensureDaemonDir()
@@ -420,7 +433,7 @@ export async function stopDaemon() {
 
 function linuxUnit({ port, workspace }) {
   const command = commandString({ port, workspace })
-  return `[Unit]\nDescription=Harpy background server\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nExecStart=${command}\nRestart=on-failure\nRestartSec=2\nEnvironment=HARPY_DAEMON_CHILD=1\n\n[Install]\nWantedBy=default.target\n`
+  return `[Unit]\nDescription=Harpy background server\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nExecStart=${command}\nRestart=always\nRestartSec=2\nEnvironment=HARPY_DAEMON_CHILD=1\n\n[Install]\nWantedBy=default.target\n`
 }
 
 function linuxDesktop({ port, workspace }) {
