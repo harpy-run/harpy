@@ -511,7 +511,7 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
         ['/say', 'pick a team or session, type the prompt'],
         ['/sessions', 'fleet grouped by working · idle · sleeping'],
         ['/peek [id] [n]', 'pick a session, read its last n lines'],
-        ['/join [id]', 'pick a session, attach live (Ctrl-] leaves)'],
+        ['/join [id]', 'pick a session, attach live (Ctrl-] · Ctrl-\\ · ~. leaves)'],
         ['/resume [id]', 'wake a sleeping session and attach'],
         ['/stop [id]', 'pick a session, stop it'],
         [c.accent('system'), ''],
@@ -812,32 +812,67 @@ export async function chatShell({ agent, prompt, cwd } = {}) {
         session = await findSession(ref)
       }
       if (!session) return err(`no session or team '${ref}'`)
-      print(`  ${dim(`attached to ${session.sessionId} — Ctrl-] detaches, output is the live terminal`)}`)
+      print(`  ${dim(`attached to ${session.sessionId} — Ctrl-] · Ctrl-\\ · ~. (line start) detaches`)}`)
       // Hand stdin raw to the session PTY: stopping the input detaches its
       // keypress plumbing so keystrokes go only where they should.
       rebuilding = true
       input.stop()
+      let detach = () => {}
+      const detached = new Promise((resolve) => { detach = resolve })
       const onPush = (ch, ev, data) => {
-        if (ch === 'agent' && ev === 'session' && data?.sessionId === session.sessionId && data.type === 'data') {
-          process.stdout.write(data.data)
-        }
+        if (ch !== 'agent' || ev !== 'session' || data?.sessionId !== session.sessionId) return
+        if (data.type === 'data') { process.stdout.write(data.data); return }
+        // The session ending while attached must release the terminal —
+        // otherwise the user is trapped in a dead passthrough.
+        if (data.type === 'done' || (data.type === 'status' && data.status !== 'running')) detach('ended')
       }
       link.push = onPush
       try { await link.call('agent', 'watch', { sessionId: session.sessionId }) } catch { void 0 }
       const stdin = process.stdin
       stdin.setRawMode?.(true)
       stdin.resume()
+      let detachReason = 'key'
       await new Promise((resolve) => {
+        detach = (reason) => { detachReason = reason; resolve() }
+        // Detach keys: Ctrl-] (0x1d) and Ctrl-\ (0x1c) — plus ssh-style
+        // `~.` at line start for layouts where neither Ctrl combo types.
+        let lineStart = true
+        let tildePending = false
+        let tildeTimer = null
+        const forward = (bytes) => { if (bytes.length) link.call('agent', 'input', { sessionId: session.sessionId, data: Buffer.from(bytes).toString('utf8') }).catch(() => {}) }
+        const flushTilde = () => { tildeTimer = null; if (tildePending) { tildePending = false; forward([0x7e]) } }
         const onData = (buf) => {
-          if ([...buf].includes(0x1d)) { stdin.off('data', onData); resolve(); return } // Ctrl-]
-          link.call('agent', 'input', { sessionId: session.sessionId, data: buf.toString('utf8') }).catch(() => {})
+          const out = []
+          for (const byte of buf) {
+            if (byte === 0x1d || byte === 0x1c) { cleanup(); detach('key'); return }
+            if (tildePending) {
+              if (tildeTimer) { clearTimeout(tildeTimer); tildeTimer = null }
+              tildePending = false
+              if (byte === 0x2e) { cleanup(); detach('key'); return } // ~.
+              out.push(0x7e)
+            }
+            if (byte === 0x7e && lineStart) {
+              tildePending = true
+              // Hold '~' briefly — a '.' means detach, anything else flushes it.
+              tildeTimer = setTimeout(flushTilde, 400)
+              continue
+            }
+            out.push(byte)
+            lineStart = byte === 0x0d || byte === 0x0a
+          }
+          forward(out)
+        }
+        const cleanup = () => {
+          if (tildeTimer) { clearTimeout(tildeTimer); tildeTimer = null }
+          stdin.off('data', onData)
         }
         stdin.on('data', onData)
+        detached.then(() => cleanup())
       })
       stdin.setRawMode?.(false)
       link.push = null
       try { await link.call('agent', 'unwatch', { sessionId: session.sessionId }) } catch { void 0 }
-      print(`\n  ${dim('detached — session keeps running in the daemon')}`)
+      print(`\n  ${dim(detachReason === 'ended' ? 'session ended — detached' : 'detached — session keeps running in the daemon')}`)
       input.start()
       showPrompt()
       rebuilding = false
