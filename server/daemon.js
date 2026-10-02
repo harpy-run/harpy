@@ -86,6 +86,19 @@ export function systemdUnit() {
   return null
 }
 
+// The macOS counterpart: when a LaunchAgent plist is installed, launchd owns
+// the daemon lifecycle. Start/stop must go through launchctl — a plain kill
+// races KeepAlive (launchd respawns the pid immediately), and a detached
+// spawn fights the respawning job over the port.
+function launchdAgent() {
+  if (process.platform !== 'darwin') return null
+  return fs.existsSync(MAC_LAUNCH_AGENT) ? MAC_LAUNCH_AGENT : null
+}
+
+function launchctl(args) {
+  try { execFileSync('launchctl', args, { stdio: 'ignore' }); return true } catch { return false }
+}
+
 async function waitForListening(port, timeout = 5_000) {
   const deadline = Date.now() + timeout
   let status = await daemonStatus({ port })
@@ -356,6 +369,17 @@ export async function startDaemon({ port = config.port, workspace } = {}) {
     }
   }
 
+  const agent = launchdAgent()
+  if (agent) {
+    const uid = os.userInfo().uid
+    if (launchctl(['bootstrap', `gui/${uid}`, agent]) || launchctl(['load', '-w', agent])) {
+      const status = await waitForListening(normalizedPort)
+      return { ...status, started: status.running || status.listening, message: status.listening ? 'daemon started' : 'daemon is starting; inspect the log if it does not come online' }
+    }
+    // launchctl unreachable — the detached spawn below is still safe on
+    // macOS: there is no cgroup teardown reaping the child with its caller.
+  }
+
   ensureDaemonDir()
   const log = fs.openSync(LOG_FILE, 'a')
   const child = spawn(process.execPath, ['--enable-source-maps', ...shellArgs({ port: normalizedPort, workspace })], {
@@ -397,6 +421,23 @@ export async function stopDaemon() {
       await waitForPortFree(port)
       return { stopped: true }
     } catch { /* fall through to the direct kill when systemctl fails */ }
+  }
+  const agent = launchdAgent()
+  if (agent) {
+    // `launchctl stop` or a bare kill would just respawn under KeepAlive —
+    // remove the job from the domain so a stop actually stays stopped.
+    // `unload` without -w (which would persist-disable) covers old macOS
+    // without `bootout`.
+    const uid = os.userInfo().uid
+    const port = Number(readState().port) || Number(readCliConfig().port) || config.port
+    if (launchctl(['bootout', `gui/${uid}/com.harpy.server`]) || launchctl(['unload', agent])) {
+      reapOrphanedListeners(port)
+      await killPortHolder(port)
+      removeState()
+      await waitForPortFree(port)
+      return { stopped: true }
+    }
+    // Not loaded through launchd after all — fall through to the pid kill.
   }
   const pid = readPid()
   // Capture the remembered port BEFORE killing — the dying server's own

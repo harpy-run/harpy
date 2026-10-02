@@ -42,6 +42,10 @@ differs from `package.json` — covers `npm i -g .`/git installs where
   it asks port + autostart; a busy port is probed via `/api/health` — a harpy
   already serving there is reported and adopted into the message, a foreign
   app is refused. `daemon status|logs|restart|stop|disable` manage it.
+  Start/stop always go through the owning supervisor: `systemctl` when a
+  systemd unit exists (`systemdUnit()`), `launchctl bootstrap`/`bootout`
+  when a LaunchAgent is installed (a bare kill just races `KeepAlive`
+  respawns) — the detached spawn is the unsupervised fallback only.
 - `harpy settings [set port|workspace|autostart <v>]` — edits
   `~/.harpy/cli.json` (0600); port resolution is flag > cli.json > env >
   default. Interactive `settings` rewrites autostart + restarts the daemon.
