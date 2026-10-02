@@ -9,7 +9,7 @@ import { recordActivity } from './activity.js'
 
 // Per-user preference, two switches sharing one store record:
 // - `memory`: the whole .harpy/ persistent-memory integration (scaffold,
-//   handoffs, AGENTS.md pointer, launch-prompt hint). Off means Harpy leaves
+//   handoffs, AGENTS.md pointer). Off means Harpy leaves
 //   the workspace untouched — nothing is created, nothing is injected.
 // - `digest`: whether a finished session may also spend a small background
 //   CLI run distilling durable facts into MEMORY.md. On by default — the

@@ -94,15 +94,11 @@ async function runAgentTurn(state, text) {
   const AdapterClass = state.adapters.get(state.agent)
   if (!AdapterClass) throw new Error(`no agent selected — /use <id>`)
   const adapter = new AdapterClass()
-  // Fresh conversations get the same persistent-memory context a daemon
-  // session would: .harpy/ scaffold + the MEMORY.md launch hint, so a bot
-  // chatting here and a team bot spawned via /team learn the same project.
-  // Resumed turns skip it — the conversation already carries the context.
+  // Fresh conversations still scaffold .harpy/ + the AGENTS.md pointer —
+  // the pointer is the memory channel; nothing is prepended to the prompt.
   if (state.fresh) {
-    const { ensureMemory, memoryPromptHint } = await import('./handoffs.js')
+    const { ensureMemory } = await import('./handoffs.js')
     ensureMemory(state.cwd, 'owner')
-    const hint = memoryPromptHint(state.cwd, 'owner')
-    if (hint) text = `${hint}\n\n${text}`
   }
   const args = state.fresh
     ? adapter.buildArgs({ prompt: text })

@@ -9,9 +9,9 @@ import { listKnownWorkspaces, projectIdForPath } from './workspace.js'
 // .harpy/MEMORY.md holds curated facts (conventions, decisions, gotchas)
 // written by humans AND agents — never transcripts. .harpy/handoffs/
 // holds one snapshot per stopped session plus an auto-generated INDEX.md.
-// Agents learn the files exist through two channels: the MEMORY_PROMPT_HINT
-// prepended to every launch prompt, and a root AGENTS.md pointer that most
-// agent CLIs auto-load when a session starts with no prompt at all.
+// Agents learn the files exist through a marked pointer block the daemon
+// maintains in the workspace's root AGENTS.md — every agent CLI auto-loads
+// AGENTS.md, so no memory text is ever injected into user prompts.
 // The whole integration is per-user opt-out: when memory is disabled Harpy
 // creates nothing, injects nothing, and removeMemoryEverywhere wipes what
 // earlier sessions left behind.
@@ -26,47 +26,6 @@ const SESSIONS_END = '<!-- /harpy:sessions -->'
 const INDEX_MAX = 12
 const AGENTS_BLOCK_START = '<!-- harpy:memory -->'
 const AGENTS_BLOCK_END = '<!-- /harpy:memory -->'
-
-const PROMPT_CONTEXT_MAX_CHARS = 8_000
-
-function promptFile(file) {
-  try {
-    const content = fs.readFileSync(file, 'utf8').trim()
-    if (!content) return '(empty)'
-    return content.length > PROMPT_CONTEXT_MAX_CHARS
-      ? `${content.slice(0, PROMPT_CONTEXT_MAX_CHARS)}\n[Harpy: remaining content omitted]`
-      : content
-  } catch {
-    return '(unavailable to Harpy)'
-  }
-}
-
-// Supply absolute paths because an agent may start in a workspace subfolder.
-// Include the MEMORY.md contents too: some CLI sandboxes refuse hidden
-// runtime files even though Harpy can read them, and that must not block the
-// task. INDEX.md is only pointed at — session history is consulted on
-// demand, so it should not ride along in every launch prompt.
-export function memoryPromptHint(workspace, owner) {
-  if (!memoryEnabledFor(owner)) return ''
-  const root = path.resolve(String(workspace || ''))
-  const memory = path.join(root, '.harpy', 'MEMORY.md')
-  const index = path.join(root, '.harpy', 'handoffs', 'INDEX.md')
-  return [
-    '[harpy] Shared project memory for this workspace:',
-    `Workspace root: ${root}`,
-    `Persistent memory: ${memory}`,
-    `Session snapshots: ${index} (read when continuing earlier work)`,
-    'Use the file contents below if your CLI cannot open these paths; continue the task and do not weaken or bypass its sandbox. If writing MEMORY.md is denied, report a proposed durable one-line update instead.',
-    'Update MEMORY.md only with durable conventions, decisions-with-rationale, or gotchas; never store chat logs or task progress.',
-    'When you report finished work, distinguish what you verified from what you attempted — "done" means checked, not hoped.',
-    'Harpy preserves an existing root AGENTS.md and does not require replacing it.',
-    '',
-    'Current MEMORY.md contents:',
-    '```markdown',
-    promptFile(memory),
-    '```'
-  ].join('\n')
-}
 
 const MEMORY_SEED = `# Project memory
 
@@ -200,8 +159,9 @@ const AGENTS_BLOCK = `${AGENTS_BLOCK_START}
 This workspace uses Harpy: before starting work, read \`.harpy/MEMORY.md\` — the project's persistent memory — and update it with durable conventions, decisions, or gotchas (never chat logs or task progress). Recent session snapshots live under \`.harpy/handoffs/\` (start with \`INDEX.md\`).
 ${AGENTS_BLOCK_END}`
 
-// A root AGENTS.md is the only channel that reaches interactive sessions
-// launched with no prompt — the CLIs load it themselves. When absent the
+// A root AGENTS.md is the channel that teaches agents about the memory —
+// every CLI auto-loads it, whether the session is interactive or prompt-
+// driven. When absent the
 // minimal pointer is created (a tracked-but-deleted AGENTS.md is a
 // deliberate removal — leave it gone). When a project already has its own
 // AGENTS.md — as CLIs like codex generate — a marked `harpy:memory` block

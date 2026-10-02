@@ -203,7 +203,7 @@ backend first, then `node scripts/smoke.mjs`.
 Eight adapters live in `server/agents/adapters/`: `harpy` (the built-in
 shell — `static builtin = true`, `cli = process.execPath` + `cli.js chat`,
 never PATH-probed, always available, skipped by the shell's own `/use`
-listing, and spawned without the `.harpy` memory-hint injection), `claude`,
+listing), `claude`,
 `codex`, `devin`, `gemini`, `qwen`, `opencode`, `grok`. The rest wrap an
 external CLI
 detected via a PATH scan (`server/util/env.js` builds a service-friendly PATH

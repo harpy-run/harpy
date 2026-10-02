@@ -12,7 +12,7 @@ import { accessAlive, accessFor, listUsers, ownerKey } from '../auth.js'
 import { projectIdForPath, workspaceCwd, workspaceRoot } from '../workspace.js'
 import { recordActivity } from '../activity.js'
 import { pinFsWatcher, unpinFsWatcher } from '../channels/fs.channel.js'
-import { ensureMemory, memoryPromptHint, tailFromHistory, writeHandoff } from '../handoffs.js'
+import { ensureMemory, tailFromHistory, writeHandoff } from '../handoffs.js'
 import { runMemoryDigest } from '../memory.js'
 import { notifyWebhook } from '../notify.js'
 
@@ -535,13 +535,9 @@ export async function startRunner(ctx, { agent, prompt = '', cwd, workspace, col
   // unless the session owner opted out of workspace memory entirely.
   const sessionOwner = ownerKey(ctx)
   ensureMemory(requestedWorkspace, sessionOwner)
-  // A launch prompt is the only channel guaranteed to reach every CLI —
-  // interactive sessions with no prompt get the pointer via AGENTS.md.
-  // Built-in adapters are the shell itself: it already knows the .harpy
-  // context, so injecting the memory hint would just type a blob into its
-  // prompt box.
-  const memoryContext = AdapterClass.builtin ? '' : memoryPromptHint(requestedWorkspace, sessionOwner)
-  const initialPrompt = [memoryContext, prompt].filter(Boolean).join('\n\n')
+  // The root AGENTS.md pointer is the only memory channel — every agent CLI
+  // auto-loads it, so nothing is injected into the user's prompt.
+  const initialPrompt = prompt
   const index = nextSessionIndex(ctx, agent, requestedWorkspace)
   const session = {
     sessionId,
