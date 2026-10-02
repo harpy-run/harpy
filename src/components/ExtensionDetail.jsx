@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'preact/hooks'
 import { ws } from '../lib/ws.js'
 import { t } from '../lib/i18n.js'
-import { activeView, isAdmin, mobileTab, panelOpen, setAgentRail, workspace } from '../state/app.js'
+import { isAdmin, mobileTab, panelOpen, setAgentRail, showSidebarView, workspace } from '../state/app.js'
 
 // Installable extensions render a store-style detail page in the editor
 // area. `agent` links an entry to an adapter id from `agent.agents`. The
@@ -103,7 +103,7 @@ export function ExtensionDetail({ id }) {
       await ws.request('agent', 'start', { agent: ext.agent, workspace: workspace.value?.path || '', cols: 100, rows: 30 })
       setAgentRail(true)
       mobileTab.value = 'agent'
-      activeView.value = 'agent'
+      showSidebarView('agent')
     } catch { /* the agent panel surfaces session errors itself */ }
   }
 

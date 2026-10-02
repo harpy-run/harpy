@@ -554,5 +554,7 @@
   "pane.close": "Paneyi kapat",
   "pane.toggleFiles": "Dosya ağacını aç/kapat",
   "pane.toggleAgent": "Agent terminalini aç/kapat",
-  "pane.emptyEditor": "Ağaçtan bir dosya seç"
+  "pane.emptyEditor": "Ağaçtan bir dosya seç",
+  "sidebar.empty": "Açık görünüm yok — raydan bir tane seç",
+  "sidebar.closeSection": "Bölümü kapat"
 }

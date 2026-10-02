@@ -554,5 +554,7 @@
   "pane.close": "Close pane",
   "pane.toggleFiles": "Toggle file tree",
   "pane.toggleAgent": "Toggle agent terminal",
-  "pane.emptyEditor": "Pick a file from the tree"
+  "pane.emptyEditor": "Pick a file from the tree",
+  "sidebar.empty": "Nothing open — pick a view from the rail",
+  "sidebar.closeSection": "Close section"
 }

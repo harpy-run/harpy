@@ -383,7 +383,13 @@ vscode-badge, .git-count, .git-badge, .agent-presence-count,
   min-height: 0;
   width: 100%;
   background: var(--ui-bg);
+  /* Track sizes animate, so opening the sidebar squeezes the agent/pane grid
+     and the auto-collapse on multi-pane slides instead of cutting. Sash
+     drags set is-resizing on <body> — transitions would lag the pointer. */
+  transition: grid-template-columns .22s var(--ease-out), grid-template-rows .22s var(--ease-out);
 }
+
+.is-resizing .workbench { transition: none; }
 
 @media (min-width: 768px) {
   /* With no agent sessions the auxiliary column collapses to zero — VS Code
@@ -393,6 +399,15 @@ vscode-badge, .git-count, .git-badge, .agent-presence-count,
   }
   .workbench.agents-collapsed .agent-resize { display: none; }
   .workbench.agents-collapsed .auxiliary { border-left: 0; overflow: hidden; }
+
+  /* Hidden sidebar reclaims its sash track too so no dead strip remains. */
+  .workbench.sidebar-hidden {
+    grid-template-columns: 46px 0 0 minmax(0, 1fr) 5px minmax(0, var(--agent-width)) 46px;
+  }
+  .workbench.sidebar-hidden.agents-collapsed {
+    grid-template-columns: 46px 0 0 minmax(0, 1fr) 0 0 46px;
+  }
+  .workbench.sidebar-hidden .sidebar-resize { display: none; }
 }
 
 .pane { min-width: 0; min-height: 0; overflow: hidden; background: var(--ui-surface); }
@@ -650,6 +665,10 @@ vscode-badge, .git-count, .git-badge, .agent-presence-count,
   grid-row: 1;
   min-width: 0;
   flex-direction: column;
+  /* Stacked sections can exceed the rail height — the column scrolls so no
+     section is ever clipped away. */
+  overflow-x: hidden;
+  overflow-y: auto;
   background: var(--ui-surface);
 }
 
@@ -659,6 +678,38 @@ vscode-badge, .git-count, .git-badge, .agent-presence-count,
 }
 
 .sidebar.collapsed { visibility: hidden; }
+
+/* Stacked sidebar sections — every rail view can stay open at once. Content
+   views split the height evenly; the run/agent info cards stay their own
+   height so they never swallow half the panel. */
+.sidebar-section {
+  position: relative;
+  display: flex;
+  flex: 1 1 0;
+  min-height: 64px;
+  flex-direction: column;
+  overflow: hidden;
+  border-bottom: 1px solid var(--ui-border);
+}
+.sidebar-section:last-child { border-bottom: 0; }
+.sidebar-section-run, .sidebar-section-agent { flex: 0 0 auto; min-height: 0; max-height: 45%; overflow-y: auto; }
+.sidebar-section > * { min-height: 0; }
+.sidebar-section .sidebar-heading { padding-right: 28px; }
+.sidebar-section-close {
+  position: absolute;
+  top: 7px;
+  right: 8px;
+  z-index: 2;
+  display: inline-flex;
+  padding: 2px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ui-faint);
+  cursor: pointer;
+}
+.sidebar-section-close:hover { color: var(--ui-text); background: var(--ui-panel-raised, rgba(255, 255, 255, .08)); }
+.sidebar-empty { display: grid; flex: 1; place-items: center; padding: 16px; text-align: center; }
 
 .sidebar-heading {
   display: flex;
@@ -3751,27 +3802,29 @@ vscode-button.auth-submit { width: 100%; }
 
 /* === Workspace panes (split view / agents grid) ============================= */
 
-/* The pane area rides on top of the whole work surface so the underlying
-   shell keeps its state while a split or the agents grid is up. It covers
-   sidebar → agent panel and both rows, but NOT the activity bar (col 1) or
-   the agent rail (col 7) — navigation must never look dead. */
+/* The pane area rides on top of the work surface so the underlying shell
+   keeps its state while a split or the agents grid is up. It covers the
+   editor through agent panel columns and both rows, but NOT the activity
+   bar (col 1), the sidebar (cols 2–3 — it stays usable and squeezes the
+   grid) or the agent rail (col 7) — navigation must never look dead. */
 .pane-area {
   position: relative;
   display: flex;
-  /* A split always divides the whole work surface — sidebar through agent
-     panel, both rows — so halves are halves of the screen, not slivers of
-     the editor column. Only the thin outer rails (activity bar col 1,
-     agent rail col 7) stay outside so navigation never dies. */
-  grid-column: 2 / 7;
+  /* The pane grid shares the work surface with the sidebar — it starts at
+     the editor column so the rail views stay reachable in agents mode and
+     opening the sidebar squeezes panes via the grid track transition. It
+     still covers the agent panel and bottom row so splits divide the real
+     work area, and the thin outer rails stay outside so navigation lives. */
+  grid-column: 4 / 7;
   grid-row: 1 / -1;
   z-index: 6;
   min-width: 0;
   min-height: 0;
   background: var(--ui-bg);
 }
-/* Agents mode uses the same full-surface coverage; the class stays as a
-   semantic marker for mode-specific rules. */
-.pane-area-full { grid-column: 2 / 7; grid-row: 1 / -1; }
+/* Agents mode shares the base placement — editor column onward, sidebar
+   stays live. The class remains as a semantic marker for mode rules. */
+.pane-area-full { grid-column: 4 / 7; grid-row: 1 / -1; }
 
 /* Pane-hosted agent fullscreen: the pane area leaves the grid entirely and
    covers the whole window (topbar included) so nothing around it stays

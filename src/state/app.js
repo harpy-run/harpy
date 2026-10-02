@@ -57,6 +57,59 @@ export const activeFile = signal('')
 // persists per workspace and survives file switches like any other tab.
 export const PREVIEW_TAB = '$preview'
 export const activeView = signal('explorer')
+// Sidebar views stack instead of swapping: the rail toggles each view's
+// section in/out, so explorer + search + remote can all stay open at once.
+// `activeView` keeps tracking the most recently used view (mobile flows and
+// the settings takeover still render a single view).
+const SIDEBAR_VIEWS = ['explorer', 'search', 'source', 'run', 'agent', 'activity', 'remote', 'extensions']
+
+function readSidebarViews() {
+  const raw = localStorage.getItem('harpy.sidebarViews')
+  if (raw === null) return ['explorer']
+  try {
+    const list = JSON.parse(raw)
+    return [...new Set((Array.isArray(list) ? list : []).filter((id) => SIDEBAR_VIEWS.includes(id)))]
+  } catch {
+    return ['explorer']
+  }
+}
+
+export const sidebarViews = signal(readSidebarViews())
+
+function persistSidebarViews() {
+  try { localStorage.setItem('harpy.sidebarViews', JSON.stringify(sidebarViews.value)) } catch { void 0 }
+}
+
+// Programmatic opens (shortcuts, command field, file actions) add the view to
+// the stack; exclusive=true restores the single-view feel for mobile pickers.
+export function showSidebarView(id, { exclusive = false } = {}) {
+  if (!SIDEBAR_VIEWS.includes(id)) { activeView.value = id; return }
+  activeView.value = id
+  if (exclusive) {
+    sidebarViews.value = [id]
+  } else if (!sidebarViews.value.includes(id)) {
+    sidebarViews.value = [...sidebarViews.value, id]
+  } else {
+    return
+  }
+  persistSidebarViews()
+}
+
+// Rail clicks toggle sections: an open view leaves the stack, a closed one
+// joins it — N highlighted rail buttons means N stacked sections.
+export function toggleSidebarView(id) {
+  if (!SIDEBAR_VIEWS.includes(id)) return
+  activeView.value = id
+  sidebarViews.value = sidebarViews.value.includes(id)
+    ? sidebarViews.value.filter((item) => item !== id)
+    : [...sidebarViews.value, id]
+  persistSidebarViews()
+}
+
+export function isSidebarView(id) {
+  return sidebarViews.value.includes(id)
+}
+
 export const panelOpen = signal(false)
 export const sidebarWidth = signal(Number(localStorage.getItem('harpy.sidebarWidth') || 276))
 export const agentWidth = signal(Number(localStorage.getItem('harpy.agentWidth') || 368))

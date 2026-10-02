@@ -6,7 +6,7 @@ import { initFsWatch, refreshFsWatch } from '../lib/fs-watch.js'
 import { WorkspaceArea } from './WorkspacePanes.jsx'
 import { initNotifications, notificationsEnabled, setNotificationsEnabled } from '../lib/notify.js'
 import { setToken } from '../lib/api.js'
-import { activePaneId, activeView, agentRailOpen, isAdmin, agentSessions, agentWidth, leafList, mobileTab, openFile, paneAreaVisible, paneLayouts, panelHeight, panelOpen, pendingFileAction, setAgentRail, setAgentWidth, setPanelHeight, setSidebarWidth, setTerminalFontSize, setTerminalScrollSpeed, setTheme, setViewMode, sidebarWidth, terminalFontSize, terminalScrollSpeed, theme, viewMode, workspace } from '../state/app.js'
+import { activePaneId, activeView, agentRailOpen, isAdmin, agentSessions, agentWidth, isSidebarView, leafList, mobileTab, openFile, paneAreaVisible, paneLayouts, panelHeight, panelOpen, pendingFileAction, setAgentRail, setAgentWidth, setPanelHeight, setSidebarWidth, setTerminalFontSize, setTerminalScrollSpeed, setTheme, setViewMode, showSidebarView, sidebarViews, sidebarWidth, terminalFontSize, terminalScrollSpeed, theme, toggleSidebarView, viewMode, workspace } from '../state/app.js'
 import { VscSelect } from './vsc.jsx'
 import { TField } from './Fields.jsx'
 import { UserManager } from './UserManager.jsx'
@@ -66,13 +66,27 @@ function ActivityBar() {
         {views.filter((view) => !view.admin || isAdmin.value).map((view) => (
          <button
             key={view.id}
-           class={'activity-button tw-rail-button ' + (activeView.value === view.id ? 'active' : '')}
-            data-active={activeView.value === view.id}
+           class={'activity-button tw-rail-button ' + (isSidebarView(view.id) ? 'active' : '')}
+            data-active={isSidebarView(view.id)}
             type="button"
             title={t(view.label)}
             aria-label={t(view.label)}
-            aria-pressed={activeView.value === view.id}
-            onClick={() => { activeView.value = view.id; if (view.id === 'run') { panelOpen.value = true; if (isCompactViewport()) mobileTab.value = 'terminal' } else { mobileTab.value = view.mobile; if (view.id === 'agent') panelOpen.value = false } if (sidebarWidth.value === 0) setSidebarWidth(276) }}
+            aria-pressed={isSidebarView(view.id)}
+            onClick={() => {
+              // Rail icons toggle stacked sidebar sections — when the sidebar
+              // is hidden the click always means "open this view", never
+              // "remove it" (toggling would show an empty panel).
+              const open = isSidebarView(view.id)
+              if (sidebarWidth.value === 0) {
+                if (!open) toggleSidebarView(view.id)
+                setSidebarWidth(276)
+              } else {
+                toggleSidebarView(view.id)
+              }
+              if (open) return
+              if (view.id === 'run') { panelOpen.value = true; if (isCompactViewport()) mobileTab.value = 'terminal' }
+              else { mobileTab.value = view.mobile; if (view.id === 'agent') panelOpen.value = false }
+            }}
           >
             <Icon name={view.icon} />
           </button>
@@ -131,7 +145,7 @@ function TopBar() {
     <header class="topbar">
       <div class="window-brand"><img class="brand-logo" src="/icons/icon-96x96.svg" alt="Harpy" /><strong>{t('app.title')}</strong></div>
       <div class="window-nav"><vscode-toolbar-button icon="arrow-left" disabled title={t('navigation.back')}></vscode-toolbar-button><vscode-toolbar-button icon="arrow-right" disabled title={t('navigation.forward')}></vscode-toolbar-button></div>
-      <button class="command-center tw-command-field" type="button" onClick={() => { activeView.value = 'search'; mobileTab.value = 'files'; if (sidebarWidth.value === 0) setSidebarWidth(276); window.dispatchEvent(new Event('harpy:focus-search')) }}><Search class="command-icon" size={15} /><span>{t('command.search')}</span><kbd>Ctrl+P</kbd></button>
+      <button class="command-center tw-command-field" type="button" onClick={() => { showSidebarView('search'); mobileTab.value = 'files'; if (sidebarWidth.value === 0) setSidebarWidth(276); window.dispatchEvent(new Event('harpy:focus-search')) }}><Search class="command-icon" size={15} /><span>{t('command.search')}</span><kbd>Ctrl+P</kbd></button>
       <ProjectSwitcher />
       {!isCompactViewport() && <div class="mode-switch" role="group" aria-label={t('mode.label')}>
         <button type="button" class={viewMode.value === 'normal' ? 'active' : ''} aria-pressed={viewMode.value === 'normal'} title={t('mode.normalHint')} onClick={() => setViewMode('normal')}><Code2 size={14} /> {t('mode.normal')}</button>
@@ -169,21 +183,34 @@ function MobileViewPicker() {
   return <nav class="mobile-view-picker" aria-label={t('view.navigation')}>
     {mobileSidebarViews.map((view) => {
       const Glyph = view.icon
-      return <button key={view.id} type="button" class={`mobile-view-pick ${activeView.value === view.id ? 'active' : ''}`} title={t(view.label)} aria-label={t(view.label)} aria-pressed={activeView.value === view.id} onClick={() => { activeView.value = view.id }}><Glyph size={17} strokeWidth={1.7} /></button>
+      return <button key={view.id} type="button" class={`mobile-view-pick ${activeView.value === view.id ? 'active' : ''}`} title={t(view.label)} aria-label={t(view.label)} aria-pressed={activeView.value === view.id} onClick={() => { showSidebarView(view.id, { exclusive: true }) }}><Glyph size={17} strokeWidth={1.7} /></button>
     })}
   </nav>
 }
 
-function SidebarView() {
-  if (activeView.value === 'search') return <SearchView />
-  if (activeView.value === 'source') return <GitPanel />
-  if (activeView.value === 'run' && isAdmin.value) return <RunView />
-  if (activeView.value === 'agent') return <AgentInfo />
-  if (activeView.value === 'activity') return <ActivityPanel />
-  if (activeView.value === 'remote') return <RemoteView />
-  if (activeView.value === 'extensions') return <ExtensionsView />
-  if (activeView.value === 'settings') return <SettingsView />
+function SidebarSection({ id }) {
+  if (id === 'search') return <SearchView />
+  if (id === 'source') return <GitPanel />
+  if (id === 'run' && isAdmin.value) return <RunView />
+  if (id === 'agent') return <AgentInfo />
+  if (id === 'activity') return <ActivityPanel />
+  if (id === 'remote') return <RemoteView />
+  if (id === 'extensions') return <ExtensionsView />
   return <><div class="sidebar-heading"><span>{t('view.explorer')}</span><span class="sidebar-heading-actions" aria-hidden="true">•••</span></div><FileTree /></>
+}
+
+// The sidebar stacks every open view — sections split the height evenly and
+// scroll internally; the rail icons (or a section's ×) toggle them in/out.
+function SidebarView() {
+  if (activeView.value === 'settings') return <SettingsView />
+  const open = sidebarViews.value.filter((id) => id !== 'run' || isAdmin.value)
+  if (!open.length) return <div class="sidebar-empty"><span class="muted">{t('sidebar.empty')}</span></div>
+  return open.map((id) => (
+    <section key={id} class={`sidebar-section sidebar-section-${id}`}>
+      <button type="button" class="sidebar-section-close" title={t('sidebar.closeSection')} aria-label={t('sidebar.closeSection')} onClick={() => toggleSidebarView(id)}><X size={11} /></button>
+      <SidebarSection id={id} />
+    </section>
+  ))
 }
 
 function SearchView() {
@@ -295,7 +322,7 @@ function SettingsView() {
     setPanelHeight(260)
     panelOpen.value = false
     mobileTab.value = 'files'
-    activeView.value = 'explorer'
+    showSidebarView('explorer', { exclusive: true })
   }
 
   return <div class="info-view settings-view">
@@ -547,18 +574,18 @@ export function Shell() {
     // `harpy:new-file` is what FileTree listens to — re-dispatching it from
     // here would retrigger this listener forever and reopen the dialog every
     // macrotask, so the view switch is all this handler may do.
-    const newFile = () => { activeView.value = 'explorer'; mobileTab.value = 'files' }
-    const createFile = () => { activeView.value = 'explorer'; mobileTab.value = 'files'; pendingFileAction.value = { type: 'file' }; window.setTimeout(() => window.dispatchEvent(new Event('harpy:new-file')), 0) }
+    const newFile = () => { showSidebarView('explorer'); mobileTab.value = 'files' }
+    const createFile = () => { showSidebarView('explorer'); mobileTab.value = 'files'; pendingFileAction.value = { type: 'file' }; window.setTimeout(() => window.dispatchEvent(new Event('harpy:new-file')), 0) }
     const shortcuts = (event) => {
       const modifier = event.ctrlKey || event.metaKey
-      if (modifier && event.key.toLowerCase() === 'p') { event.preventDefault(); activeView.value = 'search'; mobileTab.value = 'files' }
+      if (modifier && event.key.toLowerCase() === 'p') { event.preventDefault(); showSidebarView('search'); mobileTab.value = 'files' }
       if (modifier && event.key.toLowerCase() === 'b') { event.preventDefault(); setSidebarWidth(sidebarWidth.value > 0 ? 0 : 276) }
       if (modifier && event.key.toLowerCase() === 'j') { event.preventDefault(); panelOpen.value = !panelOpen.value }
-      if (modifier && event.shiftKey && event.key.toLowerCase() === 'e') { event.preventDefault(); activeView.value = 'explorer'; mobileTab.value = 'files' }
-      if (modifier && event.shiftKey && event.key.toLowerCase() === 'f') { event.preventDefault(); activeView.value = 'search'; mobileTab.value = 'files' }
-      if (modifier && event.shiftKey && event.key.toLowerCase() === 'g') { event.preventDefault(); activeView.value = 'source'; mobileTab.value = 'git' }
-      if (modifier && event.shiftKey && event.key.toLowerCase() === 'd') { event.preventDefault(); activeView.value = 'run'; panelOpen.value = true; if (isCompactViewport()) mobileTab.value = 'terminal' }
-      if (modifier && event.shiftKey && event.key.toLowerCase() === 'x') { event.preventDefault(); activeView.value = 'extensions'; mobileTab.value = 'files' }
+      if (modifier && event.shiftKey && event.key.toLowerCase() === 'e') { event.preventDefault(); showSidebarView('explorer'); mobileTab.value = 'files' }
+      if (modifier && event.shiftKey && event.key.toLowerCase() === 'f') { event.preventDefault(); showSidebarView('search'); mobileTab.value = 'files' }
+      if (modifier && event.shiftKey && event.key.toLowerCase() === 'g') { event.preventDefault(); showSidebarView('source'); mobileTab.value = 'git' }
+      if (modifier && event.shiftKey && event.key.toLowerCase() === 'd') { event.preventDefault(); showSidebarView('run'); panelOpen.value = true; if (isCompactViewport()) mobileTab.value = 'terminal' }
+      if (modifier && event.shiftKey && event.key.toLowerCase() === 'x') { event.preventDefault(); showSidebarView('extensions'); mobileTab.value = 'files' }
       if (modifier && event.shiftKey && event.key.toLowerCase() === 'm') { event.preventDefault(); setViewMode(viewMode.value === 'agents' ? 'normal' : 'agents') }
       if (modifier && event.code === 'Backquote') { event.preventDefault(); panelOpen.value = !panelOpen.value }
     }
@@ -592,10 +619,35 @@ export function Shell() {
   useEffect(() => {
     if (agentSessions.value.length > 0) setAgentRail(true)
   }, [agentSessions.value.length])
+  // Normal mode with multiple panes needs the room: the sidebar animates
+  // closed (grid track transition) while the split area slides in. Dropping
+  // back to a single leaf restores the width only when we closed it — a
+  // manually hidden sidebar stays hidden.
+  const autoCollapsedSidebar = useRef(false)
+  const prevNormalLeaves = useRef(leafList('normal').length)
+  useEffect(() => {
+    const count = leafList('normal').length
+    const crossed = prevNormalLeaves.current < 2 && count >= 2
+    const returned = prevNormalLeaves.current >= 2 && count < 2
+    prevNormalLeaves.current = count
+    if (viewMode.value !== 'normal') return
+    if (crossed && sidebarWidth.value > 0) {
+      autoCollapsedSidebar.current = true
+      setSidebarWidth(0)
+    } else if (returned && autoCollapsedSidebar.current) {
+      autoCollapsedSidebar.current = false
+      if (!sidebarWidth.value) setSidebarWidth(276)
+    }
+  }, [paneLayouts.value, viewMode.value])
+  // Reopening the sidebar while the split is up hands control back to the
+  // user — a later return to one pane must not re-hide what they set.
+  useEffect(() => sidebarWidth.subscribe((width) => {
+    if (width > 0 && leafList('normal').length >= 2) autoCollapsedSidebar.current = false
+  }), [])
   const agentsCollapsed = !agentRailOpen.value && !isCompactViewport()
   return <div class="shell">
     <TopBar />
-    <div class={`workbench ${agentsCollapsed ? 'agents-collapsed' : ''}`} style={{ '--sidebar-width': `${effectiveSidebar}px`, '--agent-width': `${effectiveAgent}px`, '--panel-height': `${effectivePanel}px` }}>
+    <div class={`workbench ${agentsCollapsed ? 'agents-collapsed' : ''} ${effectiveSidebar ? '' : 'sidebar-hidden'}`} style={{ '--sidebar-width': `${effectiveSidebar}px`, '--agent-width': `${effectiveAgent}px`, '--panel-height': `${effectivePanel}px` }}>
       <ActivityBar />
       <aside class={`sidebar pane ${mobile === 'files' || mobile === 'git' || mobile === 'settings' ? 'mobile-active' : ''} ${effectiveSidebar ? '' : 'collapsed'}`}><MobileViewPicker /><SidebarView /></aside>
       <ResizeHandle direction="vertical" className="sidebar-resize" onResize={(delta) => setSidebarWidth(sidebarWidth.value + delta)} />
@@ -606,7 +658,7 @@ export function Shell() {
       {panelOpen.value && isAdmin.value && !isCompactViewport() && <><ResizeHandle direction="horizontal" className="panel-resize" onResize={(delta) => setPanelHeight(panelHeight.value - delta)} /><div class="bottom-panel"><div class="panel-header"><span>{t('panel.terminal')}</span><vscode-toolbar-button icon="close" onClick={() => (panelOpen.value = false)} title={t('panel.close')} aria-label={t('panel.close')}></vscode-toolbar-button></div><Terminals /></div></>}
       {!isCompactViewport() && <WorkspaceArea />}
     </div>
-    <nav class="mobile-tabs" aria-label={t('view.navigation')}>{mobileTabs.filter((item) => !item.admin || isAdmin.value).map((item) => { const Glyph = item.icon; return <button key={item.id} class={`mobile-tab ${mobile === item.id ? 'active' : ''}`} type="button" onClick={() => { mobileTab.value = item.id; if (item.id === 'terminal') panelOpen.value = true; if (item.id === 'agent' || item.id === 'settings') panelOpen.value = false; if (item.id === 'git') activeView.value = 'source'; if (item.id === 'files') activeView.value = 'explorer'; if (item.id === 'agent') activeView.value = 'agent'; if (item.id === 'terminal') activeView.value = 'run'; if (item.id === 'settings') activeView.value = 'settings' }}><Glyph size={18} strokeWidth={1.7} aria-hidden="true" /><span>{t(item.label)}</span></button> })}</nav>
+    <nav class="mobile-tabs" aria-label={t('view.navigation')}>{mobileTabs.filter((item) => !item.admin || isAdmin.value).map((item) => { const Glyph = item.icon; return <button key={item.id} class={`mobile-tab ${mobile === item.id ? 'active' : ''}`} type="button" onClick={() => { mobileTab.value = item.id; if (item.id === 'terminal') panelOpen.value = true; if (item.id === 'agent' || item.id === 'settings') panelOpen.value = false; if (item.id === 'git') showSidebarView('source', { exclusive: true }); if (item.id === 'files') showSidebarView('explorer', { exclusive: true }); if (item.id === 'agent') showSidebarView('agent', { exclusive: true }); if (item.id === 'terminal') showSidebarView('run', { exclusive: true }); if (item.id === 'settings') activeView.value = 'settings' }}><Glyph size={18} strokeWidth={1.7} aria-hidden="true" /><span>{t(item.label)}</span></button> })}</nav>
     <InstallBanner />
     <ShareModal />
   </div>
