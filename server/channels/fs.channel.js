@@ -7,8 +7,10 @@ import { recordActivity } from '../activity.js'
 
 // Keep dependency trees out of the explorer/search, but expose project files
 // including dotfiles, build output and the .git directory like a local editor.
-const SKIP = new Set(['.DS_Store'])
-const SEARCH_SKIP = new Set(['node_modules', '.git', 'dist', '.cache', '.DS_Store'])
+// .harpy is Harpy's own per-workspace runtime state (MEMORY.md + handoffs) —
+// hiding it keeps the tree clean while the memory feature stays active.
+const SKIP = new Set(['.DS_Store', '.harpy'])
+const SEARCH_SKIP = new Set(['node_modules', '.git', 'dist', '.cache', '.DS_Store', '.harpy'])
 
 // Live file watching: every connected client subscribes to its workspace and
 // gets `fs:changed` pushes when bytes move on disk — another user's session,
@@ -19,7 +21,7 @@ const SEARCH_SKIP = new Set(['node_modules', '.git', 'dist', '.cache', '.DS_Stor
 const WATCH_DEBOUNCE_MS = 120
 const WATCH_MAX_FILES = 300
 const WATCH_MAX_DEPTH = 24
-const WATCH_SKIP = new Set(['node_modules', '.git', '.cache', '.next', '.nuxt', '.turbo', 'coverage', '__pycache__', '.venv', 'venv', 'target'])
+const WATCH_SKIP = new Set(['node_modules', '.git', '.cache', '.next', '.nuxt', '.turbo', 'coverage', '__pycache__', '.venv', 'venv', 'target', '.harpy'])
 const GIT_WATCH_SKIP = new Set(['objects', 'logs', 'hooks', 'info', 'lfs', 'modules', 'worktrees'])
 
 // base(realpath) -> { subscribers: Map<ctx, workspaceArg>, dirs: Map<abs, FSWatcher>, pending: Map<rel,kind>, git, timer, pins }
