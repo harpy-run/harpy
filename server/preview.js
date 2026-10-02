@@ -14,7 +14,8 @@ const execFileAsync = promisify(execFile)
 const CANDIDATE_PORTS = [3000, 3002, 4200, 4321, 5000, 5173, 5174, 5175, 8000, 8080, 8081, 8888, 9000, 9090, 1234, 1111]
 
 // Listing dev servers = reading LISTEN sockets on this machine. /proc is the
-// cheapest source on Linux; lsof covers macOS. Both are best-effort.
+// cheapest source on Linux; lsof covers macOS, netstat covers Windows. All
+// are best-effort — a missing tool falls back to the candidate ports.
 async function listeningPorts() {
   const ports = new Set(CANDIDATE_PORTS)
   try {
@@ -26,13 +27,23 @@ async function listeningPorts() {
       }
     }
   } catch {
-    try {
-      const { stdout } = await execFileAsync('lsof', ['-nP', '-iTCP', '-sTCP:LISTEN'], { timeout: 4_000 })
-      for (const line of stdout.split('\n')) {
-        const match = line.match(/:(\d+)\s*\(LISTEN\)/)
-        if (match) ports.add(Number(match[1]))
-      }
-    } catch { /* candidates only */ }
+    if (process.platform === 'win32') {
+      try {
+        const { stdout } = await execFileAsync('netstat', ['-ano', '-p', 'tcp'], { timeout: 5_000, windowsHide: true })
+        for (const line of stdout.split('\n')) {
+          const match = line.trim().match(/^TCP\s+\S+:(\d+)\s+\S+\s+LISTENING\s+\d+$/i)
+          if (match) ports.add(Number(match[1]))
+        }
+      } catch { /* candidates only */ }
+    } else {
+      try {
+        const { stdout } = await execFileAsync('lsof', ['-nP', '-iTCP', '-sTCP:LISTEN'], { timeout: 4_000 })
+        for (const line of stdout.split('\n')) {
+          const match = line.match(/:(\d+)\s*\(LISTEN\)/)
+          if (match) ports.add(Number(match[1]))
+        }
+      } catch { /* candidates only */ }
+    }
   }
   for (const port of ports) {
     if (!port || port < 80 || port > 65535 || port === config.port) ports.delete(port)

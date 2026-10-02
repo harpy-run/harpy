@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { getAdapter, listAgents } from './agents/adapter.js'
 import { config } from './config.js'
-import { enhancedEnv } from './util/env.js'
+import { enhancedEnv, resolveCommand, verbatimOpts } from './util/env.js'
 import { cliEnvFor } from './cli-env.js'
 import { recordActivity } from './activity.js'
 
@@ -24,9 +24,12 @@ const DIGEST_MAX_ATTEMPTS = 6
 // input from stdin (claude's stream-json mode) waits forever and dies by
 // timeout instead of answering fast. spawn + immediate stdin.end() gives
 // every headless CLI a clean EOF.
-function runCli(cli, args, { cwd, env } = {}) {
+async function runCli(cli, args, { cwd, env } = {}) {
+  // .cmd shims on Windows need the cmd.exe wrapper — resolveCommand handles
+  // the platform mapping (verbatim args carry the escaped /c line).
+  const target = await resolveCommand(cli, args, env?.PATH || env?.Path)
   return new Promise((resolve, reject) => {
-    const child = spawn(cli, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] })
+    const child = spawn(target.file, target.tail ? [target.tail] : target.args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, ...verbatimOpts(target) })
     let out = ''
     let settled = false
     const done = (error) => {

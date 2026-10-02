@@ -350,7 +350,11 @@ export async function fireAutomation(workspace, slug, { trigger = 'manual', deta
 
   if (automation.gate) {
     try {
-      await execFileAsync('/bin/sh', ['-c', automation.gate], {
+      // /bin/sh does not exist on Windows — cmd /c keeps the same
+      // exit-code contract (nonzero = the gate says work is needed).
+      const gateShell = process.platform === 'win32' ? (process.env.ComSpec || 'cmd.exe') : '/bin/sh'
+      const gateArgs = process.platform === 'win32' ? ['/d', '/s', '/c', automation.gate] : ['-c', automation.gate]
+      await execFileAsync(gateShell, gateArgs, {
         cwd,
         timeout: GATE_TIMEOUT_MS,
         env: {

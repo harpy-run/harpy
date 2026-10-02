@@ -6,6 +6,27 @@ import { accessFor } from './auth.js'
 
 const knownWorkspaces = new Set()
 
+// Path equality on a case-insensitive filesystem (Windows, default APFS):
+// "C:\Repo" and "c:\repo" are the same directory — string compares otherwise
+// throw phantom "unknown workspace"/"outside workspace" 403s. realpath
+// canonicalizes stored casing when the path exists; non-existent targets
+// fall back to the lexical form (still safe — the prefix rule holds).
+function canon(p) {
+  try { return fs.realpathSync(p) } catch { return p }
+}
+function sameFsPath(a, b) {
+  let x = canon(a)
+  let y = canon(b)
+  if (process.platform === 'win32') { x = x.toLowerCase(); y = y.toLowerCase() }
+  return x === y
+}
+function isWithin(base, resolved) {
+  let a = canon(base)
+  let b = canon(resolved)
+  if (process.platform === 'win32') { a = a.toLowerCase(); b = b.toLowerCase() }
+  return b === a || b.startsWith(a + path.sep)
+}
+
 // Per-user active workspace: projects.js installs this resolver at module
 // load (it owns workspace.json). Keeping the hook here avoids a
 // projects↔workspace import cycle.
@@ -50,7 +71,7 @@ export function workspaceRoot(requested, ctx) {
     throw httpError(404, 'workspace not found')
   }
   const active = config.workspace ? path.resolve(config.workspace) : ''
-  if (resolved !== active && !knownWorkspaces.has(resolved)) throw httpError(403, 'unknown workspace')
+  if (!sameFsPath(resolved, active) && ![...knownWorkspaces].some((known) => sameFsPath(known, resolved))) throw httpError(403, 'unknown workspace')
   if (ctx) {
     const access = accessFor(ctx)
     if (!access) throw httpError(401, 'session revoked')
@@ -66,7 +87,7 @@ export function workspacePath(requestedWorkspace, relativePath = '.', ctx, { all
   const value = String(relativePath || '.')
   if (value.includes('\0') || value.includes('\n')) throw httpError(400, 'path is invalid')
   const resolved = path.resolve(base, value)
-  if (!allowOutside && resolved !== base && !resolved.startsWith(`${base}${path.sep}`)) throw httpError(403, 'path outside workspace')
+  if (!allowOutside && !isWithin(base, resolved)) throw httpError(403, 'path outside workspace')
   return { base, relative: value, resolved }
 }
 

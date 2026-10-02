@@ -1,3 +1,4 @@
+import os from 'node:os'
 import { spawnPty } from '../util/pty.js'
 import { httpError } from '../util/http.js'
 import { enhancedEnv } from '../util/env.js'
@@ -74,7 +75,9 @@ function updateFlowControl(shell) {
 // allowlist was never meant to grant host-level command execution.
 
 function defaultShell() {
-  return process.env.SHELL || (process.platform === 'win32' ? 'powershell.exe' : 'bash')
+  // Service managers strip SHELL; the account's login shell is the next best
+  // (zsh on macOS) — hardcoding bash would hand macOS users a 2007-era 3.2.
+  return process.env.SHELL || (process.platform === 'win32' ? 'powershell.exe' : (os.userInfo().shell || 'bash'))
 }
 
 function dimensions(cols, rows) {

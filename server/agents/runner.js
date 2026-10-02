@@ -6,7 +6,8 @@ import { spawnPty } from '../util/pty.js'
 import { getAdapter } from './adapter.js'
 import { config } from '../config.js'
 import { httpError } from '../util/http.js'
-import { enhancedEnv } from '../util/env.js'
+import { enhancedEnv, resolveCommand } from '../util/env.js'
+import { commandLineOf, killProcessTree, pidAlive, processTree } from '../util/proc.js'
 import { cliEnvFor } from '../cli-env.js'
 import { accessAlive, accessFor, listUsers, ownerKey } from '../auth.js'
 import { projectIdForPath, workspaceCwd, workspaceRoot } from '../workspace.js'
@@ -91,56 +92,9 @@ function dimensions(cols, rows) {
 // CLIs spawn helpers that outlive a plain pty kill (devin → `devin acp`,
 // codex → the rust binary + code-mode-host). Those survivors keep holding
 // the session lock files, so the next resume fails with "session_locked".
-// /proc gives the full subtree; the pty child is a session leader, so its
-// group (-pid) covers helpers that re-parented.
-function processTree(rootPid) {
-  const root = Number(rootPid)
-  const tree = new Set([root])
-  const children = new Map()
-  try {
-    for (const name of fs.readdirSync('/proc')) {
-      if (!/^\d+$/.test(name)) continue
-      let stat
-      try { stat = fs.readFileSync(`/proc/${name}/stat`, 'utf8') } catch { continue }
-      const close = stat.lastIndexOf(')')
-      if (close === -1) continue
-      const ppid = Number(stat.slice(close + 2).split(' ')[1])
-      if (!Number.isInteger(ppid) || ppid <= 0) continue
-      const list = children.get(ppid)
-      if (list) list.push(Number(name))
-      else children.set(ppid, [Number(name)])
-    }
-  } catch { return tree }
-  const queue = [root]
-  while (queue.length) {
-    for (const kid of children.get(queue.shift()) || []) {
-      if (!tree.has(kid)) { tree.add(kid); queue.push(kid) }
-    }
-  }
-  return tree
-}
-
-function isProcessAlive(pid) {
-  try { process.kill(pid, 0); return true } catch (error) { return error?.code === 'EPERM' }
-}
-
-// SIGTERM first so a clean exit lets the CLI drop its session lock, then a
-// short grace period before SIGKILL sweeps whatever ignored it.
-function killProcessTree(rootPid, { graceMs = 800 } = {}) {
-  const root = Number(rootPid)
-  if (!Number.isInteger(root) || root <= 0) return
-  const tree = [...processTree(root)]
-  const signal = (pid, sig) => { try { process.kill(pid, sig) } catch { void 0 } }
-  try { process.kill(-root, 'SIGTERM') } catch { void 0 }
-  for (const pid of tree) signal(pid, 'SIGTERM')
-  const sweep = setTimeout(() => {
-    try { process.kill(-root, 'SIGKILL') } catch { void 0 }
-    for (const pid of processTree(root)) signal(pid, 'SIGKILL')
-    for (const pid of tree) signal(pid, 'SIGKILL')
-  }, graceMs)
-  sweep.unref?.()
-}
-
+// processTree/killProcessTree (util/proc.js) pick the right mechanism per
+// platform — /proc + process groups on Linux, `ps` on macOS, taskkill /T
+// on Windows — so locks are released everywhere, not just on Linux.
 function terminateSessionProcess(session) {
   const term = session.term
   if (!term) return
@@ -172,10 +126,11 @@ function pidOwnedByLiveSession(pid) {
 }
 
 function pidMatchesAdapterCli(pid, agent) {
-  try {
-    const cli = getAdapter(agent)?.cli || agent
-    return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes(cli)
-  } catch { return false }
+  const cli = getAdapter(agent)?.cli || agent
+  const cmdline = commandLineOf(pid)
+  // Match the bare name too — on Windows the resolved shim is `claude.cmd`,
+  // on POSIX the absolute path still ends in the cli name.
+  return cmdline.includes(cli) || cmdline.includes(path.basename(String(cli)))
 }
 
 function updateSessionFlowControl(session) {
@@ -267,15 +222,21 @@ function nextSessionIndex(ctx, agent, currentWorkspace) {
 
 async function spawnTerm(session, args) {
   const AdapterClass = getAdapter(session.state.agent)
-  const term = await spawnPty(AdapterClass.cli, args, {
+  // HARPY_HOME points the child at the daemon's real data dir so the
+  // bundled shell — and member sessions with a redirected private HOME —
+  // can reach cli.key. cli-env may still override it; built-in adapters
+  // need the true value, so theirs always wins.
+  const env = await enhancedEnv({ TERM: 'xterm-256color', COLORTERM: 'truecolor', HARPY_HOME: config.dataDir, ...(session.adapter?.spawnEnv?.() || {}), ...(cliEnvFor(session.owner) || {}), ...(AdapterClass.builtin ? { HARPY_HOME: config.dataDir } : {}) })
+  // Windows npm CLIs are .cmd shims — CreateProcess cannot exec batch files,
+  // so resolveCommand rewrites them to a cmd.exe /c command line (pty.spawn
+  // takes a pre-escaped string on Windows). POSIX resolves to an absolute
+  // path so PATH drift inside the pty cannot lose the CLI.
+  const target = await resolveCommand(AdapterClass.cli, args, env.PATH || env.Path)
+  const term = await spawnPty(target.file, target.tail ?? target.args, {
     name: 'xterm-256color',
     ...session.size,
     cwd: session.state.cwd,
-    // HARPY_HOME points the child at the daemon's real data dir so the
-    // bundled shell — and member sessions with a redirected private HOME —
-    // can reach cli.key. cli-env may still override it; built-in adapters
-    // need the true value, so theirs always wins.
-    env: await enhancedEnv({ TERM: 'xterm-256color', COLORTERM: 'truecolor', HARPY_HOME: config.dataDir, ...(session.adapter?.spawnEnv?.() || {}), ...(cliEnvFor(session.owner) || {}), ...(AdapterClass.builtin ? { HARPY_HOME: config.dataDir } : {}) })
+    env
   })
   session.term = term
   term.onData((data) => queueSessionData(session, data))
@@ -365,7 +326,7 @@ function handleExit(session, { exitCode, signal }) {
   if (resumeFailed && !session.lockKilled) {
     const holder = lockHolderFromHistory(session)
     if (holder && !pidOwnedByLiveSession(holder)) {
-      const alive = isProcessAlive(holder)
+      const alive = pidAlive(holder)
       if (!alive || pidMatchesAdapterCli(holder, session.state.agent)) {
         session.lockKilled = true
         if (alive) { try { process.kill(holder, 'SIGKILL') } catch { void 0 } }

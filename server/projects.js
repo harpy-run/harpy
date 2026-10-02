@@ -353,13 +353,19 @@ export function selectProject(id, ctx) {
   return { ...record, active: true }
 }
 
+// `~` expands for either separator — users type ~/proj even on Windows where
+// path.sep is a backslash, and a literal "~/" directory almost never exists.
+function expandHome(value) {
+  return value === '~' || /^~[/\\]/.test(value) ? path.join(os.homedir(), value.slice(2)) : value
+}
+
 // Admin-granted workspace roots for per-user allowlists: validate the folder,
 // register it for the workspace guard, and remember it in workspace.json so it
 // survives restarts — without switching the caller's active project.
 export function grantExternalWorkspace(folderPath) {
   const value = String(folderPath || '').trim()
   if (!value) throw httpError(400, 'folder path required')
-  const expanded = value === '~' || value.startsWith(`~${path.sep}`) ? path.join(os.homedir(), value.slice(2)) : value
+  const expanded = expandHome(value)
   const resolved = path.resolve(expanded)
   let stat
   try { stat = fs.statSync(resolved) } catch { throw httpError(404, 'folder not found') }
@@ -380,7 +386,7 @@ export function grantExternalWorkspace(folderPath) {
 export function openWorkspace(folderPath, ctx) {
   const value = String(folderPath || '').trim()
   if (!value) throw httpError(400, 'folder path required')
-  const expanded = value === '~' || value.startsWith(`~${path.sep}`) ? path.join(os.homedir(), value.slice(2)) : value
+  const expanded = expandHome(value)
   const target = path.resolve(expanded)
   let stat
   try { stat = fs.statSync(target) } catch { throw httpError(404, 'folder not found') }
@@ -415,7 +421,7 @@ function rememberExternalPath(resolved) {
 
 export function browseDirectories(folderPath) {
   const value = String(folderPath || '').trim()
-  const expanded = value === '~' || value.startsWith(`~${path.sep}`) ? path.join(os.homedir(), value.slice(2)) : (value || process.cwd())
+  const expanded = value ? expandHome(value) : process.cwd()
   const target = path.resolve(expanded)
   let stat
   try { stat = fs.statSync(target) } catch { throw httpError(404, 'folder not found') }

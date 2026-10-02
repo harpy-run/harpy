@@ -108,7 +108,9 @@ export function installMode() {
 }
 
 function run(command, args, options = {}) {
-  const result = spawnSync(command, args, { stdio: 'inherit', ...options })
+  // npm is a .cmd shim on Windows — batch files cannot exec directly and
+  // need cmd.exe (shell:true). Harmless for real .exe targets like git.
+  const result = spawnSync(command, args, { stdio: 'inherit', shell: process.platform === 'win32', windowsHide: true, ...options })
   if (result.status !== 0) throw new Error(`${command} ${args.join(' ')} failed (${result.status})`)
 }
 
@@ -169,30 +171,44 @@ export async function applyUpdate({ restartDaemon = true } = {}) {
   try {
     const mode = installMode()
     const steps = []
+    const { stopDaemon, startDaemon, daemonStatus, healthProbe } = restartDaemon ? await import('./daemon.js') : {}
+    const status = restartDaemon ? await daemonStatus() : null
+    // `listeningPort` is where a real server was found — it can differ from
+    // the configured port when the running copy came from a foreground
+    // `harpy start` or an older state record. Restart must target THAT port
+    // or the new daemon is spawned against a port the old one still owns.
+    const restartPort = status ? (status.listeningPort || status.port) : null
+    const needsRestart = Boolean(status && (status.running || status.listening || status.listeningPort))
     writeUpdateState({ phase: 'install', from: VERSION, mode })
-    if (mode === 'npm') {
-      const npmBin = process.platform === 'win32' ? 'npm.cmd' : 'npm'
-      run(npmBin, ['install', '-g', `${NPM_PACKAGE}@latest`])
-      steps.push('npm install -g')
-    } else if (mode === 'git') {
-      run('git', ['-C', PACKAGE_ROOT, 'fetch', '--tags', 'origin'])
-      run('git', ['-C', PACKAGE_ROOT, 'pull', '--ff-only'])
-      const npmBin = process.platform === 'win32' ? 'npm.cmd' : 'npm'
-      run(npmBin, ['install'], { cwd: PACKAGE_ROOT })
-      run(npmBin, ['run', 'build'], { cwd: PACKAGE_ROOT })
-      steps.push('git pull + rebuild')
-    } else {
-      throw new Error(`cannot self-update from this install — download ${RELEASE_PAGE}`)
+    // Windows locks loaded native modules — a running daemon keeps the
+    // node-pty .node open and `npm i -g` dies mid-write with EBUSY, leaving
+    // a half-written package. POSIX replaces files while running; Windows
+    // must stop the daemon BEFORE the install, then bring it back.
+    const stopFirst = needsRestart && process.platform === 'win32' && mode === 'npm'
+    if (stopFirst) await stopDaemon()
+    try {
+      if (mode === 'npm') {
+        const npmBin = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+        run(npmBin, ['install', '-g', `${NPM_PACKAGE}@latest`])
+        steps.push('npm install -g')
+      } else if (mode === 'git') {
+        run('git', ['-C', PACKAGE_ROOT, 'fetch', '--tags', 'origin'])
+        run('git', ['-C', PACKAGE_ROOT, 'pull', '--ff-only'])
+        const npmBin = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+        run(npmBin, ['install'], { cwd: PACKAGE_ROOT })
+        run(npmBin, ['run', 'build'], { cwd: PACKAGE_ROOT })
+        steps.push('git pull + rebuild')
+      } else {
+        throw new Error(`cannot self-update from this install — download ${RELEASE_PAGE}`)
+      }
+    } catch (error) {
+      // A failed npm install after the pre-stop must not leave the host
+      // dead — restart the old version (the package dir may still be intact).
+      if (stopFirst) { try { await startDaemon({ port: restartPort }) } catch { void 0 } }
+      throw error
     }
-    if (restartDaemon) {
-      const { stopDaemon, startDaemon, daemonStatus, healthProbe } = await import('./daemon.js')
-      const status = await daemonStatus()
-      // `listeningPort` is where a real server was found — it can differ from
-      // the configured port when the running copy came from a foreground
-      // `harpy start` or an older state record. Restart must target THAT port
-      // or the new daemon is spawned against a port the old one still owns.
-      const restartPort = status.listeningPort || status.port
-      if (status.running || status.listening || status.listeningPort) {
+    if (restartDaemon && needsRestart) {
+      {
         writeUpdateState({ phase: 'restart', from: VERSION, mode, port: restartPort })
         await stopDaemon()
         await startDaemon({ port: restartPort })

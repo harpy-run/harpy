@@ -13,7 +13,7 @@ import { BoxedInput } from './cli-input.js'
 import { readCliConfig, resolvePort, writeCliConfig } from './cli-config.js'
 import { cliLang, translator } from './cli-i18n.js'
 import { config, VERSION } from './config.js'
-import { enhancedEnv } from './util/env.js'
+import { enhancedEnv, resolveCommand, verbatimOpts } from './util/env.js'
 
 const CLI_KEY_FILE = () => path.join(config.dataDir, 'daemon', 'cli.key')
 
@@ -104,8 +104,11 @@ async function runAgentTurn(state, text) {
     ? adapter.buildArgs({ prompt: text })
     : (adapter.buildContinueArgs({ prompt: text, sessionId: state.agentSession }) ?? adapter.buildArgs({ prompt: text }))
   const env = await enhancedEnv(adapter.spawnEnv?.() || {})
+  // Windows shims (.cmd) cannot exec directly — resolveCommand wraps them in
+  // cmd.exe and the verbatim flag passes the pre-escaped line untouched.
+  const target = await resolveCommand(AdapterClass.cli, args, env.PATH || env.Path)
   return new Promise((resolve) => {
-    const child = spawn(AdapterClass.cli, args, { cwd: state.cwd, env, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(target.file, target.tail ? [target.tail] : target.args, { cwd: state.cwd, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, ...verbatimOpts(target) })
     state.child = child
     let tail = ''
     let stderr = ''

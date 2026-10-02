@@ -83,6 +83,42 @@ backend first, then `node scripts/smoke.mjs`.
   (different port — set `BASE` or run a second server on 3231). Requires at least
   one agent CLI on PATH and verifies sessions survive reconnect.
 
+## Cross-platform rules (macOS + Windows)
+
+The daemon must behave identically on linux/darwin/win32. Hard constraints:
+
+- **Never spawn a bare CLI name on Windows.** npm CLIs are `.cmd` shims and
+  CreateProcess cannot exec batch files — always go through
+  `resolveCommand()` in `server/util/env.js` (PATHEXT scan → cmd.exe `/c`
+  wrapper for `.cmd`/`.bat`, `powershell -File` for `.ps1`, absolute path on
+  POSIX). For `spawn()` pass `...verbatimOpts(target)` + the `tail` arg form;
+  for `pty.spawn` pass `target.tail ?? target.args` (the string form is the
+  Windows-only CommandLine option).
+- **Env merges are case-insensitive on Windows** — never
+  `{...process.env, PATH: ...}` (produces duplicate `Path`+`PATH` and the
+  enhanced PATH is lost). `enhancedEnv()` handles this; route extra vars
+  through it or match the existing key's casing.
+- **No POSIX process APIs in shared code**: `/proc`, `process.kill(-pid)`
+  (negative pid = process group) and `ps`/`lsof`/`pgrep` are
+  Linux/macOS-only. Use `server/util/proc.js` — `processTree`, `pidAlive`,
+  `killProcessTree` (taskkill /T on Windows), `commandLineOf` (powershell
+  CIM on win32, `ps` elsewhere).
+- **Shells**: default POSIX shell comes from `os.userInfo().shell`, not a
+  hardcoded bash (macOS wants zsh); gate commands run through
+  `ComSpec`/`cmd.exe /d /s /c` on Windows, `/bin/sh -c` elsewhere.
+- **Path compares are case-insensitive on Windows** (`C:\Foo` == `c:\foo`) —
+  `workspace.js` canonicalizes via realpath + lowercase; keep that pattern.
+- **`~` expands for both `~/` and `~\`** (`projects.js` `expandHome`).
+- **Detached spawns need `windowsHide: true`** or a console window flashes
+  on the user's desktop. Windows autostart is a Startup-folder `Harpy.vbs`
+  (hidden wscript launch), never a visible `.cmd`.
+- **Self-update on Windows stops the daemon BEFORE `npm i -g`** — loaded
+  `.node` binaries (node-pty) are locked files there.
+- `fs.watch` stays per-directory (recursive watch does not exist on Linux);
+  `git`, `tar`, `ssh-keygen`, `netstat`, `lsof`, `ps`, `taskkill`,
+  `powershell`, `launchctl`, `systemctl` are the only allowed external
+  tools, each behind its platform gate.
+
 ## Architecture boundaries
 
 - Live filesystem sync: `fs.watch`/`fs.unwatch` subscribe a connection to its

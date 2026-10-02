@@ -50,6 +50,7 @@ export const systemChannel = {
       const child = spawn(process.execPath, [cliPath, 'update', '--yes'], {
         detached: true,
         stdio: ['ignore', out, out],
+        windowsHide: true,
       })
       child.unref()
       return { started: true, supervisor: 'detached', log: updateLog() }

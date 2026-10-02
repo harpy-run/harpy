@@ -17,7 +17,13 @@ export class DevinAdapter extends Adapter {
   // newest entry in `devin list --format json` for this working directory.
   captureSessionId({ cwd } = {}) {
     try {
-      const raw = execFileSync('devin', ['list', '--format', 'json'], { cwd, encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'pipe', 'ignore'] })
+      // devin installs as a .cmd shim on Windows — batch files need cmd.exe.
+      const win = process.platform === 'win32'
+      const raw = execFileSync(
+        win ? (process.env.ComSpec || 'cmd.exe') : 'devin',
+        win ? ['/d', '/s', '/c', 'devin list --format json'] : ['list', '--format', 'json'],
+        { cwd, encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }
+      )
       const sessions = JSON.parse(raw || '[]')
       return sessions.sort((a, b) => (b.last_activity_at || 0) - (a.last_activity_at || 0))[0]?.id || null
     } catch { return null }

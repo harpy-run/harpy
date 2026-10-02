@@ -6,6 +6,7 @@ import { execFileSync, spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { config, VERSION } from './config.js'
 import { readCliConfig } from './cli-config.js'
+import { commandLineOf } from './util/proc.js'
 
 // The daemon deliberately uses only Node's standard library.  This keeps the
 // npm install small while still giving the server the same always-on behaviour
@@ -19,7 +20,12 @@ const LINUX_UNIT = path.join(os.homedir(), '.config', 'systemd', 'user', SERVICE
 const LINUX_SYSTEM_UNIT = `/etc/systemd/system/${SERVICE_NAME}`
 const LINUX_AUTOSTART = path.join(os.homedir(), '.config', 'autostart', 'harpy.desktop')
 const MAC_LAUNCH_AGENT = path.join(os.homedir(), 'Library', 'LaunchAgents', 'com.harpy.server.plist')
-const WINDOWS_STARTUP = path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'Harpy.cmd')
+const WINDOWS_STARTUP_DIR = path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup')
+const WINDOWS_STARTUP = path.join(WINDOWS_STARTUP_DIR, 'Harpy.vbs')
+// Older builds dropped a visible Harpy.cmd in the Startup folder — closing
+// that console window killed the daemon. Remove the legacy file on
+// install/uninstall so a hidden wscript launch is the only registration.
+const WINDOWS_STARTUP_LEGACY = path.join(WINDOWS_STARTUP_DIR, 'Harpy.cmd')
 const CLI_ENTRY = fileURLToPath(new URL('./cli.js', import.meta.url))
 
 
@@ -173,14 +179,15 @@ export async function killPortHolder(port) {
 
 function pidMatchesDaemon(pid) {
   if (!processRunning(pid)) return false
-  if (process.platform === 'win32') return true
-  try {
-    const command = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').replaceAll('\0', ' ')
-    return command.includes('server/cli.js') && command.includes('daemon')
-  } catch {
-    // /proc is unavailable on some Unix variants; trust the PID file there.
+  const command = commandLineOf(pid)
+  if (!command) {
+    // No inspection tool at all (bare-bones POSIX) — the pidfile is the
+    // only signal left, so keep trusting it rather than orphan the daemon.
     return true
   }
+  // Pids get reused: a stale pidfile must never bless an unrelated process —
+  // stopDaemon would taskkill its whole tree on Windows.
+  return command.includes('cli.js') && command.includes('daemon')
 }
 
 function normalizePort(value) {
@@ -426,8 +433,11 @@ function macLaunchAgent({ port, workspace }) {
 }
 
 function windowsStartup({ port, workspace }) {
-  const command = commandString({ port, workspace })
-  return `@echo off\r\nstart "Harpy" /b ${command}\r\n`
+  // Wscript.Shell.Run with window style 0 launches fully hidden — a plain
+  // .cmd would leave a console window on the taskbar whose close button
+  // takes the daemon down with it.
+  const command = commandString({ port, workspace }).replace(/"/g, '""')
+  return `CreateObject("Wscript.Shell").Run "${command}", 0, False\r\n`
 }
 
 export function autostartStatus() {
@@ -439,7 +449,7 @@ export function autostartStatus() {
     return { enabled: fs.existsSync(LINUX_AUTOSTART), mode: 'desktop', path: LINUX_AUTOSTART }
   }
   if (process.platform === 'darwin') return { enabled: fs.existsSync(MAC_LAUNCH_AGENT), mode: 'launchagent', path: MAC_LAUNCH_AGENT }
-  if (process.platform === 'win32') return { enabled: fs.existsSync(WINDOWS_STARTUP), mode: 'startup-folder', path: WINDOWS_STARTUP }
+  if (process.platform === 'win32') return { enabled: fs.existsSync(WINDOWS_STARTUP) || fs.existsSync(WINDOWS_STARTUP_LEGACY), mode: 'startup-folder', path: WINDOWS_STARTUP }
   return { enabled: false, mode: 'unsupported', path: null }
 }
 
@@ -470,6 +480,7 @@ export function installAutostart({ port = config.port, workspace, mode = 'auto' 
   if (process.platform === 'win32') {
     fs.mkdirSync(path.dirname(WINDOWS_STARTUP), { recursive: true })
     fs.writeFileSync(WINDOWS_STARTUP, windowsStartup({ port: normalizedPort, workspace }), { mode: 0o600 })
+    try { fs.unlinkSync(WINDOWS_STARTUP_LEGACY) } catch { void 0 }
     return autostartStatus()
   }
   return autostartStatus()
@@ -483,7 +494,7 @@ export function removeAutostart() {
     try { execFileSync('launchctl', ['unload', '-w', MAC_LAUNCH_AGENT], { stdio: 'ignore' }) } catch { void 0 }
     try { fs.unlinkSync(MAC_LAUNCH_AGENT) } catch { void 0 }
   } else if (process.platform === 'win32') {
-    try { fs.unlinkSync(WINDOWS_STARTUP) } catch { void 0 }
+    for (const file of [WINDOWS_STARTUP, WINDOWS_STARTUP_LEGACY]) { try { fs.unlinkSync(file) } catch { void 0 } }
   }
   return autostartStatus()
 }

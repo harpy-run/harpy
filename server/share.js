@@ -13,6 +13,7 @@ import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
 import { config, VERSION } from './config.js';
+import { killProcessTree } from './util/proc.js';
 
 
 const log = (msg) => console.log(`[share] ${msg}`);
@@ -322,7 +323,7 @@ export async function shareEnable(provider, opts = {}, { port = config.port } = 
         if (!url) throw new Error(`${provider} did not report a public URL`);
         sweepStrayProviderDaemons(provider, pid);
     } else {
-        const child = spawn(spec.cmd, spec.args, { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+        const child = spawn(spec.cmd, spec.args, { detached: true, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
         child.stdout?.pipe(fs.createWriteStream(tunnelLog(), { flags: 'a' }));
         child.stderr?.pipe(fs.createWriteStream(tunnelLog(), { flags: 'a' }));
         url = spec.url || await waitForUrl(child, spec.urlRe, 25000);
@@ -416,7 +417,7 @@ async function shareDisableInternal() {
     const p = PROVIDERS[st.provider];
     if (p?.stop) { try { await p.stop({ port: config.port }); } catch { /* best effort */ } }
     if (st?.pid && pidAlive(st.pid)) {
-        try { process.kill(-st.pid, 'SIGTERM'); } catch { try { process.kill(st.pid, 'SIGTERM'); } catch { /* gone */ } }
+        killProcessTree(st.pid);
     }
 }
 
@@ -546,8 +547,9 @@ export async function boreLogin(origin) {
     fs.writeFileSync(openLog(), '', { mode: 0o600 });
     const child = spawn(bin, ['login'], {
         detached: true,
+        windowsHide: true,
         stdio: ['ignore', fs.openSync(tunnelLog(), 'a'), fs.openSync(tunnelLog(), 'a')],
-        env: { ...process.env, PATH: `${openers}:${process.env.PATH || ''}`, BROWSER: path.join(openers, 'open') },
+        env: { ...process.env, PATH: `${openers}${path.delimiter}${process.env.PATH || ''}`, BROWSER: path.join(openers, 'open') },
     });
     child.unref();
     pendingBore = { pid: child.pid, cbPort: null, at: Date.now() };
@@ -588,7 +590,7 @@ export async function boreFinish(pasteUrl) {
 
 function killPending() {
     if (pendingBore?.pid && pidAlive(pendingBore.pid)) {
-        try { process.kill(-pendingBore.pid, 'SIGTERM'); } catch { try { process.kill(pendingBore.pid, 'SIGTERM'); } catch { /* gone */ } }
+        killProcessTree(pendingBore.pid);
     }
     pendingBore = null;
 }
