@@ -7,6 +7,10 @@ export class ClaudeAdapter extends Adapter {
   static icon = '/icons/claude-ai-icon.svg'
   static interactive = true
   static install = { command: 'npm install -g @anthropic-ai/claude-code' }
+  // Claude refuses --dangerously-skip-permissions under root/sudo. When the
+  // daemon itself runs as root (containers, VPS installs) IS_SANDBOX is the
+  // documented opt-in that tells claude the whole box is disposable anyway.
+  spawnEnv() { return process.getuid?.() === 0 ? { IS_SANDBOX: '1' } : null }
 
   buildTerminalArgs() { return ['--dangerously-skip-permissions'] }
   buildResumeArgs() { return ['--continue', '--dangerously-skip-permissions'] }

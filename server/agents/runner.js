@@ -275,7 +275,7 @@ async function spawnTerm(session, args) {
     // bundled shell — and member sessions with a redirected private HOME —
     // can reach cli.key. cli-env may still override it; built-in adapters
     // need the true value, so theirs always wins.
-    env: await enhancedEnv({ TERM: 'xterm-256color', COLORTERM: 'truecolor', HARPY_HOME: config.dataDir, ...(cliEnvFor(session.owner) || {}), ...(AdapterClass.builtin ? { HARPY_HOME: config.dataDir } : {}) })
+    env: await enhancedEnv({ TERM: 'xterm-256color', COLORTERM: 'truecolor', HARPY_HOME: config.dataDir, ...(session.adapter?.spawnEnv?.() || {}), ...(cliEnvFor(session.owner) || {}), ...(AdapterClass.builtin ? { HARPY_HOME: config.dataDir } : {}) })
   })
   session.term = term
   term.onData((data) => queueSessionData(session, data))

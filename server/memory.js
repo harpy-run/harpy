@@ -242,7 +242,7 @@ export async function runMemoryDigest({ agent, workspace, owner, ownerName, hand
   let lastError = 'no digest-capable CLI'
   for (const attempt of attempts.slice(0, DIGEST_MAX_ATTEMPTS)) {
     try {
-      const env = attempt.env || (await enhancedEnv({}))
+      const env = { ...(attempt.env || (await enhancedEnv({}))), ...(attempt.run.adapter?.spawnEnv?.() || {}) }
       const { stdout } = await runCli(attempt.run.cli, attempt.run.args, { cwd: digestCwd, env })
       const reply = replyText(attempt.run.adapter, stdout)
       if (!reply) throw new Error(`${attempt.id} returned an empty reply`)

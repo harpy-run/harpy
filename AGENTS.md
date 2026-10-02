@@ -216,6 +216,10 @@ follow-up path — adapters that can target a conversation id (codex
 directly rather than a global `--last`/`--continue`, which can attach to an
 unrelated session; `captureSessionId({cwd})` covers CLIs whose output carries
 no id (devin re-reads `devin list --format json` for the newest session).
+An adapter's `spawnEnv()` adds per-CLI env at every spawn path (PTY session,
+shell headless turn, memory digest) — claude uses it to set `IS_SANDBOX=1`
+when the daemon runs as root, which is claude's documented opt-in for
+`--dangerously-skip-permissions` under root/sudo.
 Each adapter may also declare `static
 install` (`{ command, windows? }`) — the CLI's one-line installer, shown in
 the new-session modal so an unavailable agent can be installed in a visible

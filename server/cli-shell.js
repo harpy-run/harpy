@@ -107,7 +107,7 @@ async function runAgentTurn(state, text) {
   const args = state.fresh
     ? adapter.buildArgs({ prompt: text })
     : (adapter.buildContinueArgs({ prompt: text, sessionId: state.agentSession }) ?? adapter.buildArgs({ prompt: text }))
-  const env = await enhancedEnv()
+  const env = await enhancedEnv(adapter.spawnEnv?.() || {})
   return new Promise((resolve) => {
     const child = spawn(AdapterClass.cli, args, { cwd: state.cwd, env, stdio: ['ignore', 'pipe', 'pipe'] })
     state.child = child

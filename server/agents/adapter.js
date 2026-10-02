@@ -32,6 +32,9 @@ export class Adapter {
   captureSessionId(_context) { return null }
   normalizeLine(_line, _state) { return [] }
   buildUserFrame(text) { return `${text}\n` }
+  // Extra env the spawned CLI needs — e.g. claude's IS_SANDBOX opt-in that
+  // lets --dangerously-skip-permissions run under a root daemon.
+  spawnEnv() { return null }
 }
 
 export function registerAdapter(AdapterClass) {
