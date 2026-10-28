@@ -1,20 +1,30 @@
 // Keep xterm and the server-side PTY in sync with split-pane layout changes.
 // A pane can settle over more than one frame while a sash is dragged, so the
 // fit is deliberately scheduled after two animation frames.
-export function watchTerminalResize(host, fit, terminal, onResize) {
+export function watchTerminalResize(host, fit, terminal, onResize, isViewVisible = () => true) {
   if (!host) return () => {}
 
   let frame = 0
   let disposed = false
   let lastSize = ''
   const schedule = () => {
+    if (disposed) return
     if (frame) cancelAnimationFrame(frame)
     frame = requestAnimationFrame(() => {
       frame = requestAnimationFrame(() => {
         frame = 0
-        if (disposed || !host.isConnected || document.visibilityState === 'hidden') return
+        if (disposed) return
+        // An overlaid terminal can still have nonzero bounds. It must not
+        // resize the PTY that a visible view of the same session is using.
+        if (!host.isConnected || document.visibilityState === 'hidden' || !isViewVisible()) {
+          lastSize = ''
+          return
+        }
         const rect = host.getBoundingClientRect()
-        if (rect.width < 4 || rect.height < 4) return
+        if (rect.width < 4 || rect.height < 4) {
+          lastSize = ''
+          return
+        }
         try {
           fit.fit()
           // xterm exposes the current dimensions on the terminal instance.
@@ -33,6 +43,18 @@ export function watchTerminalResize(host, fit, terminal, onResize) {
       })
     })
   }
+  const reassertSize = () => {
+    // A reconnected backend may have changed the PTY size.
+    lastSize = ''
+    schedule()
+  }
+  const panelVisibilityChanged = () => {
+    // Record hiding immediately even if the pane reopens before the next
+    // frame. Ordinary window resize events also publish panel visibility,
+    // so keep deduplication while this view remains visible.
+    if (!isViewVisible()) lastSize = ''
+    schedule()
+  }
 
   const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(schedule) : null
   let current = host
@@ -42,7 +64,8 @@ export function watchTerminalResize(host, fit, terminal, onResize) {
   window.addEventListener('resize', schedule)
   window.addEventListener('orientationchange', schedule)
   window.addEventListener('pageshow', schedule)
-  window.addEventListener('harpy:ws-open', schedule)
+  window.addEventListener('harpy:ws-open', reassertSize)
+  window.addEventListener('harpy:panel-visibility', panelVisibilityChanged)
   document.addEventListener('visibilitychange', schedule)
   document.fonts?.ready.then(schedule).catch(() => {})
   schedule()
@@ -54,7 +77,8 @@ export function watchTerminalResize(host, fit, terminal, onResize) {
     window.removeEventListener('resize', schedule)
     window.removeEventListener('orientationchange', schedule)
     window.removeEventListener('pageshow', schedule)
-    window.removeEventListener('harpy:ws-open', schedule)
+    window.removeEventListener('harpy:ws-open', reassertSize)
+    window.removeEventListener('harpy:panel-visibility', panelVisibilityChanged)
     document.removeEventListener('visibilitychange', schedule)
   }
   // Consumers can request another measurement after an async history restore

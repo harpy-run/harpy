@@ -301,7 +301,7 @@
   "skills.agent": "Агент",
   "skills.scope": "Область",
   "skills.scopeUser": "Домашний каталог",
-  "skills.scopeWorkspace": "Workspace (.claude/skills)",
+  "skills.scopeWorkspace": "Workspace (.agents/skills)",
   "skills.forUser": "Для пользователя",
   "skills.self": "Я сам",
   "skills.repoPlaceholder": "owner/repo или https:// git URL",

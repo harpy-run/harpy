@@ -2,24 +2,20 @@ const WRITE_BATCH_CHARS = 256 * 1024
 const MAX_PENDING_CHARS = 4 * 1024 * 1024
 const OVERLOAD_MARKER_RESERVE = 128
 
-function atLiveEdge(terminal) {
-  const buffer = terminal?.buffer?.active
-  return !buffer || buffer.type === 'alternate' || buffer.viewportY >= buffer.baseY
-}
-
 // Coalesce bursts of small PTY frames before handing them to xterm. xterm
 // still time-slices parsing internally; this avoids flooding its write queue
 // with a separate render task for every websocket frame.
 export function createTerminalOutputQueue(terminal) {
   const queue = []
   let frame = 0
+  let writing = false
   let disposed = false
   let pendingChars = 0
   let currentParts = null
   let currentPartChars = 0
 
   function schedule() {
-    if (!frame && !disposed) frame = requestAnimationFrame(flush)
+    if (!frame && !writing && !disposed) frame = requestAnimationFrame(flush)
   }
 
   function flush() {
@@ -60,14 +56,18 @@ export function createTerminalOutputQueue(terminal) {
     }
 
     const complete = () => {
-      // Stay attached to live output but preserve the reader's position in
-      // scrollback once they have deliberately moved away from the prompt.
-      if (!disposed && atLiveEdge(terminal)) terminal.scrollToBottom()
+      writing = false
+      if (disposed) return
+      // xterm tracks whether the user is reading scrollback. Calling
+      // scrollToBottom here overrides that state after asynchronous parsing
+      // (especially during agent screen redraws and alternate-buffer swaps).
       for (const callback of callbacks) callback()
       if (queue.length) schedule()
     }
-    if (batch.length) terminal.write(batch.join(''), complete)
-    else complete()
+    if (batch.length) {
+      writing = true
+      terminal.write(batch.join(''), complete)
+    } else complete()
   }
 
   return {

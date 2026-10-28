@@ -152,9 +152,20 @@ A lint failure appeared in {files}. Fix it and report the diff.
 
 Each workspace gets a `.harpy/` directory agents can read and write:
 
-- `MEMORY.md` holds durable facts — when a session ends, a short background CLI
-  run distills what is worth remembering.
+- `MEMORY.md` holds durable facts recorded during the existing task. Optional
+  session-end distillation is **off by default**; `/memory digest on` explicitly
+  enables the additional CLI/model run.
 - Handoff snapshots let a new session pick up where the last one stopped.
+- Project procedures live in `.agents/skills/<name>/SKILL.md` with `name` and
+  `description` frontmatter (legacy `.claude/skills` is also discovered).
+  Prompt-bearing agent launches and fresh headless turns get a local metadata
+  catalog capped at 4 KiB; agents read only relevant skill bodies on demand.
+  Blank interactive launches remain blank; a later logical send can supply
+  context, while raw terminal keystrokes are never rewritten.
+- The already-running task agent can create/update a skill after verifying a
+  reusable procedure. Discovery adds no model calls, network requests or remote
+  installations. Loading/authoring skills still uses tokens in the normal task.
+  Skills are project files and survive disabling `.harpy` memory.
 
 ### Files, editor, and shell
 

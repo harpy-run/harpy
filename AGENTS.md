@@ -1,381 +1,115 @@
 # AGENTS.md
 
-Harpy v2 — a self-hosted AI coding workbench: a Node.js backend (ESM, Node >=22)
-serves a Preact/Vite frontend over HTTP plus one authenticated WebSocket that
-multiplexes `fs`, `git`, `pty`, `agent`, `project`, `auth`, `activity`, `share`
-channels. There is no test runner and no
-typecheck script — `npm run lint` is the only automated check.
-WS hygiene: `pty`/`agent` terminal data coalesces per ~16ms tick before
-sending (one frame per screen refresh, replay ordering preserved — never
-forward raw onData chunks), and the hub heartbeat treats any inbound frame
-as liveness (pong timeout 30s) so loaded or high-latency links are not
-killed prematurely.
-Static serving (`server/static.js`): hashed `/assets/*` get `immutable`
-cache headers; everything else is `no-cache` + etag so an update can never
-keep serving a stale `index.html`/`sw.js`. The service worker
-(`public/sw.js`) never caches navigations and revalidates them; the update
-modal's reload purges Cache Storage first. `prepare`
-(`scripts/ensure-dist.mjs`) rebuilds `dist/` when its embedded version
-differs from `package.json` — covers `npm i -g .`/git installs where
-`prepack` never runs, so a stale bundle can't ship. The `version` script
-chains ensure-dist for the same reason: a checkout that serves its own
-`dist/` (this repo included) must rebuild on every bump or the UI's
-`CURRENT_VERSION` stays behind the release and the update banner loops
-forever even though the daemon already runs the new version.
+Harpy v2 — a self-hosted AI coding workbench. Node.js backend (ESM, Node >=22) serves a Preact/Vite frontend over HTTP and multiplexes 10 channels (`project`, `auth`, `fs`, `git`, `pty`, `agent`, `activity`, `share`, `system`, `automation`) across a single authenticated WebSocket (`server/index.js:89`).
 
-## Commands
+## Verification & Commands
 
-- `npm install` — the PTY backend is `@lydell/node-pty`, whose native
-  binaries ship inside the npm tarball as per-platform optionalDependencies
-  (win32/darwin/linux, x64/arm64). No install scripts, no C++ toolchain —
-  do not install with `--omit=optional` or terminals/agents break.
-- `npm start` (a.k.a. `npm run server`) — backend only, always on the stable
-  publication port `3001`. For an isolated port use `node server/cli.js start
-  --port N`; host is `0.0.0.0`; serves `dist/` if it exists, otherwise 404s on `/`.
-- `harpy` (no args, TTY) — opens the arrow-key launcher picker (`Harpy Team`
-  → the codex-style agent shell, `Dashboard` → the classic status menu,
-  `open web UI`; Esc exits). The shell chats with any installed agent CLI and
-  manages daemon teams (`/team`, `/say`, `/peek`, `/join`, `/daemon`, …); `/`
-  on an empty prompt opens the filtered command palette. `harpy chat [prompt]`
-  skips the launcher (one-shot/REPL), `harpy dash` jumps to the dashboard.
-  All pickers are cursor/highlight lists — `server/cli-ui.js`'s `choose()`
-  owns raw-mode keys; non-TTY always falls back to plain status output.
-- `harpy daemon install` — start the backend detached and register login
-  autostart (systemd/desktop entry on Linux, LaunchAgent on macOS, Startup folder
-  on Windows). On a real first run (no `~/.harpy/cli.json`, TTY, no `--port`)
-  it asks port + autostart; a busy port is probed via `/api/health` — a harpy
-  already serving there is reported and adopted into the message, a foreign
-  app is refused. `daemon status|logs|restart|stop|disable` manage it.
-  Start/stop always go through the owning supervisor: `systemctl` when a
-  systemd unit exists (`systemdUnit()`), `launchctl bootstrap`/`bootout`
-  when a LaunchAgent is installed (a bare kill just races `KeepAlive`
-  respawns) — the detached spawn is the unsupervised fallback only.
-- `harpy settings [set port|workspace|autostart <v>]` — edits
-  `~/.harpy/cli.json` (0600); port resolution is flag > cli.json > env >
-  default. Interactive `settings` rewrites autostart + restarts the daemon.
-- `harpy update [--check|--yes]` — checks npm registry **and** GitHub
-  releases/tags, applies through the install channel (`npm i -g` for global
-  installs, `git pull --ff-only` + rebuild for checkouts), then restarts the
-  daemon **and verifies `/api/health` answers before reporting success**. The
-  restart reclaims the port by health identity — an untracked harpy holding it
-  (foreground `harpy start`, stale-pidfile orphan) is killed via
-  `killPortHolder`, while a foreign app is still refused. "No update
-  available" compares the CLI's own VERSION — the daemon process can still
-  serve an older build (out-of-band pull, a restart that never landed), so
-  `updateFlow` calls `restartStaleDaemon()`: when the health probe's version
-  differs, the remaining update IS the restart, and the UI's update banner
-  would otherwise loop forever. Under systemd the updater runs as its own
-  transient oneshot in the daemon's scope (`systemd-run --user` for a user
-  unit) — a system-scoped updater cannot reach `systemctl --user`, and a
-  detached fallback child would be reaped with the unit cgroup on `--collect`
-  (`startDaemon` refuses the fallback when `INVOCATION_ID` is set).
-  `server/update.js` holds the logic: a lockdir at
-  `$HARPY_HOME/daemon/update.lock` serializes concurrent updaters and
-  `update-state.json` records the phase (`install`/`restart`/`done`/`failed`)
-  for the UI's `system.updateStatus` poll; `server/cli-ui.js` is the
-  dependency-free prompt/ANSI layer (degrades cleanly without a TTY).
-- `npm run dev` — Vite frontend only, port 5199. **It proxies `/api` and `/ws` to
-  the backend at `PORT||HARPY_PORT||3001`, so you must also run `npm start` or API/WS will fail.**
-- `npm run build` — Vite build into `dist/` (what the backend serves in prod).
-- `npm run lint` — ESLint flat config (`eslint.config.js`); run before claiming done.
+- **Automated Checks:** `npm run lint` (ESLint flat config) is the primary automated check. `npm run build` (production Vite build into `dist/`) must stay green. No general test runner or typecheck script. Run both `npm run lint` and `npm run build` before claiming done. Release CI (`.github/workflows/release.yml`) runs only on `v*` tags and never lints.
+- **Standalone Offline Tests:** Fast regression scripts under `scripts/` run locally without a backend or credentials:
+  - `node scripts/skill-context-test.mjs` — skill discovery, 4 KiB budget, symlink rejection, cwd isolation.
+  - `node scripts/memory-regression-test.mjs` — memory digest prefs, handoffs, AGENTS.md pointer migration.
+  - `node scripts/skills-manager-test.mjs` — git clone sandboxing, private homes, path traversal defenses.
+  - `node scripts/terminal-clipboard-test.mjs` — terminal copy vs Ctrl+C SIGINT preservation.
+- `npm install`: PTY backend `@lydell/node-pty` bundles per-platform native binaries in `optionalDependencies`. **Never** install with `--omit=optional`, or terminal and agent spawning fails.
+- `npm start` (or `npm run server`): backend on `3001` (`0.0.0.0`). Serves `dist/` when present, 404s on `/` otherwise. Custom port: `node server/cli.js start --port N`.
+- `npm run dev`: Vite on `5199`; proxies `/api` + `/ws` to `PORT || HARPY_PORT || 3001` — **requires `npm start` in parallel**.
+- `npm run build`: Vite build into `dist/`.
+- `npm run check:version` / `npm run version:sync`: version lives in 4 places that must agree — `package.json`, `package-lock.json`, `server/config.js` (`VERSION`), `src/lib/updater.js`. `check:version` accepts `--tag vX.Y.Z` (used by release CI).
+- `scripts/ensure-dist.mjs` (`prepare`, and chained into the `version` script): rebuilds `dist/` when its embedded version drifts from `package.json`. Required because `prepack` never runs on `npm i -g .` or a git checkout, and a checkout serves its own `dist/` — a stale bundle makes the UI's `CURRENT_VERSION` lag and the update banner loop forever.
+- `harpy` / `harpy-team` (both → `server/cli.js`): interactive agent shell or launcher picker. Subcommands: `chat`, `dash`, `start`, `status`, `version`, `team`, `daemon`, `settings`, `share`, `update`.
+- `harpy daemon`: `install | status | logs | restart | stop | disable`. systemd on Linux, `launchctl` on macOS, Startup folder `Harpy.vbs` on Windows; detached spawn is unsupervised fallback only.
 
-## Distribution
+### Integration Smoke Tests (Running Server Required)
 
-npm-only. `release.yml` (tag push `v*` or dispatch) creates a bare GitHub
-release (notes + source archive — no binaries) and publishes
-`@harpy-run/harpy` via the `NPM_TOKEN` repo secret. There is no desktop shell.
+Scripts under `scripts/` hit a **running** backend (`BASE` env overrides default `http://localhost:3001`). Use an isolated `HARPY_HOME` and port, never someone's live server:
 
-Verify order: `npm run lint`. There is no `test` script.
+- `node scripts/smoke.mjs`: `/api/health`, first-run setup (`HARPY_SMOKE_PASSWORD`, default `secret123`), login, static serve, WS channels. Asserts `agent.agents` returns exactly **8** adapters — bump this whenever adapters change.
+- `node scripts/agent-terminal-smoke.mjs`: default `http://127.0.0.1:3231`; asserts agent sessions survive client reconnects. Needs ≥1 agent CLI on PATH.
+- `node scripts/shell-lifecycle-smoke.mjs`: spawns `cli.js chat` via pty at several window sizes; asserts clean exit 0 on `/exit`, `^C`, `^D` without hanging.
+- `node scripts/activity-smoke.mjs`: `activity` channel event logging + subscriptions.
+- `npm run screenshots` (`scripts/screenshots.mjs`): captures UI screenshots — CONTRIBUTING asks for these on UI changes.
 
-## Smoke tests (manual, no npm script)
+## Environment
 
-`scripts/*.mjs` are plain node scripts that hit a **running** server — start the
-backend first, then `node scripts/smoke.mjs`.
+- `HARPY_HOME` (default `~/.harpy`) holds all runtime state: `auth.json` (0600), `cli.json` (0600, port/workspace/preferred agent), `cli-env.json` (per-user CLI env), `daemon/harpy.pid`, `daemon/cli.key` (0600), `share.json`, `agent-availability.json`, `automations/<ws-hash>/*.md`, `worktrees/`, `daemon/state.json`. Per-*workspace* state lives separately in `<workspace>/.harpy/` (`handoffs/`, memory). Secrets never belong in the repo.
+- Other env: `PORT`/`HARPY_PORT`, `HARPY_HOST`, `HARPY_PROJECTS` (default `./harpy-projects`), `HARPY_WORKSPACE`, `HARPY_AGENT_IDLE_MS` (default 4h; `0` disables session suspend).
 
-- `smoke.mjs` — `BASE` defaults to `http://localhost:3001`. Performs first-run
-  setup itself using `HARPY_SMOKE_PASSWORD` (default `secret123`). Asserts the
-  WS `agent.agents` reply has exactly **8** adapters — keep this in sync if you
-  add/remove an adapter in `server/agents/adapters/`.
-- `agent-terminal-smoke.mjs` — `BASE` defaults to `http://127.0.0.1:3231`
-  (different port — set `BASE` or run a second server on 3231). Requires at least
-  one agent CLI on PATH and verifies sessions survive reconnect.
+## Cross-Platform Constraints (macOS, Windows, Linux)
 
-## Cross-platform rules (macOS + Windows)
+- **Windows CLI spawns:** Never spawn bare CLI names (npm CLIs are `.cmd` batch shims `CreateProcess` cannot exec). Resolve through `resolveCommand()` in `server/util/env.js:184`. For `spawn()`, pass `...verbatimOpts(target)` + `tail`; for `pty.spawn`, pass `target.tail ?? target.args`.
+- **Env vars on Windows:** merges are case-insensitive. Never `{...process.env, PATH: ...}` (drops/duplicates `Path`). Use `enhancedEnv()`.
+- **No POSIX process APIs in shared code:** no `/proc`, `process.kill(-pid)`, `ps`, `lsof`, `pgrep`. Use `server/util/proc.js` (`processTree`, `pidAlive`, `killProcessTree`, `commandLineOf`).
+- **Shell selection:** `process.env.SHELL` → on Windows `powershell.exe`, else `os.userInfo().shell` (macOS must get zsh, not bash).
+- **Paths & case:** Windows paths are case-insensitive; canonicalize via `realpath` + lowercase (`server/workspace.js`). `~` expands for both `~/` and `~\`.
+- **Detached spawns:** always `windowsHide: true`; Windows autostart must be a hidden `Harpy.vbs`, never `.cmd`.
+- **Windows self-update:** must stop the daemon before `npm i -g` — loaded `.node` binaries are locked by the OS.
+- **fs watching:** `fs.watch` stays per-directory; recursive watching is unsupported on Linux.
+- **Provider binary downloads:** GitHub `/releases/latest/download/<name>` only works for stable asset names — versioned names need the release API (`githubLatestAssetUrl`). Walk tarballs with `ensureBinaryTgz`, don't hardcode member paths.
 
-The daemon must behave identically on linux/darwin/win32. Hard constraints:
+## Architecture & Subsystem Rules
 
-- **Never spawn a bare CLI name on Windows.** npm CLIs are `.cmd` shims and
-  CreateProcess cannot exec batch files — always go through
-  `resolveCommand()` in `server/util/env.js` (PATHEXT scan → cmd.exe `/c`
-  wrapper for `.cmd`/`.bat`, `powershell -File` for `.ps1`, absolute path on
-  POSIX). For `spawn()` pass `...verbatimOpts(target)` + the `tail` arg form;
-  for `pty.spawn` pass `target.tail ?? target.args` (the string form is the
-  Windows-only CommandLine option).
-- **Env merges are case-insensitive on Windows** — never
-  `{...process.env, PATH: ...}` (produces duplicate `Path`+`PATH` and the
-  enhanced PATH is lost). `enhancedEnv()` handles this; route extra vars
-  through it or match the existing key's casing.
-- **No POSIX process APIs in shared code**: `/proc`, `process.kill(-pid)`
-  (negative pid = process group) and `ps`/`lsof`/`pgrep` are
-  Linux/macOS-only. Use `server/util/proc.js` — `processTree`, `pidAlive`,
-  `killProcessTree` (taskkill /T on Windows), `commandLineOf` (powershell
-  CIM on win32, `ps` elsewhere).
-- **Shells**: default POSIX shell comes from `os.userInfo().shell`, not a
-  hardcoded bash (macOS wants zsh); gate commands run through
-  `ComSpec`/`cmd.exe /d /s /c` on Windows, `/bin/sh -c` elsewhere.
-- **Path compares are case-insensitive on Windows** (`C:\Foo` == `c:\foo`) —
-  `workspace.js` canonicalizes via realpath + lowercase; keep that pattern.
-- **`~` expands for both `~/` and `~\`** (`projects.js` `expandHome`).
-- **Detached spawns need `windowsHide: true`** or a console window flashes
-  on the user's desktop. Windows autostart is a Startup-folder `Harpy.vbs`
-  (hidden wscript launch), never a visible `.cmd`.
-- **Self-update on Windows stops the daemon BEFORE `npm i -g`** — loaded
-  `.node` binaries (node-pty) are locked files there.
-- `fs.watch` stays per-directory (recursive watch does not exist on Linux);
-  `git`, `tar`, `ssh-keygen`, `netstat`, `lsof`, `ps`, `taskkill`,
-  `powershell`, `launchctl`, `systemctl` are the only allowed external
-  tools, each behind its platform gate.
-- **Provider binary downloads must be verified per-platform.** GitHub
-  `releases/latest/download/<name>` only works for STABLE asset names —
-  versioned names (zrok) need the release API (`githubLatestAssetUrl`), and
-  some projects ship only archives on certain OSes (cloudflared is
-  `.tgz`-only on darwin). `ensureBinaryTgz` walks the tarball for the binary
-  rather than trusting a member path.
+### WebSocket & Terminal Data Flow
+- Most application RPC uses one authenticated `/ws` (`{ch, id, op, data}`), not REST CRUD. Handlers live in `server/channels/`.
+- Terminal output is coalesced per ~16ms tick (`DATA_FLUSH_MS`, `server/channels/pty.channel.js:21`, `server/agents/runner.js:171`) before framing; never forward raw `onData` chunks — per-chunk frames flood high-latency tunnels and trip `bufferedAmount` flow control. Replay uses the history ring (2000 events / 2 MiB).
+- Hub: ping every 30s, 30s pong budget, terminate when `bufferedAmount > 4 MiB`; **any inbound frame resets liveness** (`server/ws.js`). `maxPayload` 8 MiB so 5 MiB file saves fit one frame; `perMessageDeflate` threshold 1 KiB (big win through tunnels).
+- Credentials ride in `Sec-WebSocket-Protocol: harpy, <cred>`; `?key=`/`?token=` are legacy fallbacks.
+- **Client heartbeat alias:** `src/lib/ws.js:110` sends `{ch:'sys', op:'ping'}`. `sys` is *not* a registered channel — the hub answers `ping` generically before channel dispatch. Don't "fix" it to `system`, and don't route real ops through `sys`.
+- Per-channel flow control pauses `term.resume()` at 2 MiB / resumes at 512 KiB per subscriber.
+- Terminal clipboard (`src/lib/terminal-clipboard.js`): Ctrl+C with text selected copies and clears selection; without selection passes SIGINT to PTY. Has synchronous textarea fallback for insecure HTTP contexts.
+- Terminal renderer (`src/lib/terminal-renderer.js`): xterm 6 dropped `@xterm/addon-canvas`. Uses `@xterm/addon-webgl` with fallback to built-in DOM renderer.
 
-## Architecture boundaries
+### Agent Adapters (`server/agents/adapters/`)
+- Eight adapters: `harpy` (builtin shell), `claude`, `codex`, `devin`, `gemini`, `qwen`, `opencode`, `grok`. Adding/removing one requires editing `registerAllAdapters` (`adapters/index.js`) **and** the count assertion (`8`) in `scripts/smoke.mjs`.
+- External CLIs are probed through the login-shell PATH; results cached in `$HARPY_HOME/agent-availability.json` for 24h.
+- Preferred agent lives in `cli.json` (`preferredAgentId()` in `server/agents/adapter.js`); automations and digests fall back to it.
+- Idle sessions suspend after `HARPY_AGENT_IDLE_MS` (default 4h) — a wedged long-idle CLI is worse than a resumable sleeping session.
+- Session resume: metadata persists; wake respawns CLI with adapter resume arguments, not an OS process freeze or saved scrollback.
 
-- Live filesystem sync: `fs.watch`/`fs.unwatch` subscribe a connection to its
-  workspace; `fs:changed` pushes `{workspace, files:[{path,kind}], git}` to
-  every subscriber (debounced ~120ms). Watching is per-directory
-  (node_modules/caches skipped — inotify cost stays proportional to the
-  source tree); `.git` top-level + `refs/` flag `git:true` so commits/pulls
-  from any side refresh the Git panel instantly. Late-appearing `.git` dirs
-  are picked up live. Client subscription is centralized in
-  `src/lib/fs-watch.js` (re-arms on `harpy:ws-open`, re-points on
-  workspace change); views just listen for the event.
-- `server/` — Node backend. Entry `server/index.js` (`createHttpServer`/`startServer`);
-  CLI `server/cli.js` (`harpy start [--port N] [--workspace PATH] | status | version`).
-  One file per WS channel in `server/channels/`. `server/agents/runner.js` spawns
-  agent CLIs via `node-pty`; `workspaceCwd` rejects any cwd outside the workspace (403).
-  `server/activity.js` keeps a per-workspace JSONL event log (fs ops, watcher
-  flushes, git, pty/agent lifecycles) behind the `activity` channel; workspace
-  keys are canonicalized realpaths, and running agent sessions + activity
-  subscribers pin the fs watcher so logging survives closed trees/clients.
-  `server/share.js` backs the admin-only `share` channel and `harpy share`:
-  it spawns a detached tunnel process (cloudflared / `ssh -R` to a sish relay /
-  ngrok / zrok / bore.dk) that exposes the daemon on a public HTTPS URL. State
-  lives in `$HARPY_HOME/share.json` (+ `share-opts.json` 0600 for restart),
-  a persistent `share-key` ed25519 keypair is the sish identity, tunnel output
-  appends to `$HARPY_HOME/share.log`, and `shareResume()` +
-  `shareSupervise()` (dead pid → respawn, repeated `/api/health` probe
-  failures → restart) keep the tunnel alive across daemon restarts and edge
-  drops. For singleton-daemon providers (bore), `shareEnable`/`shareResume`/
-  `shareSupervise` all run `sweepStrayProviderDaemons` — a spawn race or
-  orphaned `bore daemon` would otherwise double-register the same namespace
-  and the edge flaps connections between a live and a dead backend. The
-  public-URL probe also compares the upstream `version` against
-  this daemon's `VERSION` — a tunnel that answers as a *different* harpy is
-  pointing at a stale/foreign server and gets re-spawned. bore.dk auth is
-  headless-friendly: `share.boreLogin` shadows
-  `xdg-open` with a shim to capture the auth URL, rewrites its
-  `127.0.0.1:port/callback` to the caller's origin, and the public
-  `GET /api/share/bore/callback` route (auth:false) proxies the redirect back
-  to the local listener — sign-in works from any device, incl. phones.
-  `share.probe` reports live tunnel health. Provider secrets are write-only —
-  `share.json` masks them. The UI entry points are `ShareModal` (opened via
-  the `harpy:share-open` window event), a slim `ShareCard` row in Settings,
-  and the Remote view.
-  `server/automations.js` is the event-driven automation engine: Markdown +
-  frontmatter definitions in `$HARPY_HOME/automations/<ws-hash>/*.md` trigger
-  agent runs (`on: fs|cron|webhook|session-end`) after an optional local
-  `gate:` command exits nonzero — a clean gate spends zero tokens. fs
-  triggers ride the existing watcher via `registerFsListener` +
-  `pinFsWatcher`; cron uses a 30s unref'd tick; webhooks arrive at
-  `POST /api/hooks/<slug>` (auth:false, HMAC `x-harpy-signature`/`x-hub-
-  signature-256`, per-automation `whsec_` secret in
-  `$HARPY_HOME/automations-state.json`); `setSessionEndHook` in runner.js
-  feeds session-end triggers. Runs spawn through `startRunner` with a
-  synthetic owner ctx and `automation: <slug>` — they show as normal
-  sessions, are skipped by `restoreSessions`, never retrigger other
-  automations, and `isolated: true` runs in a detached worktree under
-  `$HARPY_HOME/worktrees/` (session-end cleanup + boot sweep). Cooldown,
-  per-automation serialization and a 3-run global cap prevent loops.
-  `workspaceCwd`/`workspacePath` take `{allowOutside}` only for that path.
-  WS channel `automation` (list/read = access, save/remove/toggle/runNow =
-  admin); `setAutomationNotifier` broadcasts `automation.changed`.
-  `server/cli-shell.js` is the codex-style shell behind `Harpy Team`
-  (the launcher's first pick) and `harpy chat`:
-  plain text is a headless agent turn (adapter `buildArgs`/`buildContinueArgs`
-  + `normalizeLine`, so every CLI renders the same stream), and `/commands`
-  drive the daemon over a loopback WebSocket authed by
-  `$HARPY_HOME/daemon/cli.key` (an `hp_…` key the daemon mints at boot,
-  0600, removed on shutdown — same-host local capability, no password
-  prompt). "Teams" are a `team` label on daemon agent sessions (start
-  input → `sessionInfo` → persisted in `agent-sessions.json` → restored):
-  `/team` opens a guided new-bot form (name · agent picker · task — `default`
-  is the standing team), `/team ls|up|rm|down` manages bots, `/say`
-  (broadcast), `/peek` (history), `/join` (raw passthrough, Ctrl-] detaches),
-  `/resume` (wake a sleeping session and attach), `/sessions` (grouped by
-  working/idle/sleeping), `/status`, `/daemon`, `/use`, `/cwd`, `/new`,
-  `/update`, `/open`, `/set`. `harpy-team` is a second bin name for the same
-  `server/cli.js` — argv[1] basename detection skips the launcher and opens
-  the shell directly; the web "Harpy Team" picker entry spawns it as a
-  built-in agent session (`node cli.js chat` via the `harpy` adapter), so it
-  lives in the agent terminal alongside codex/devin sessions — selectable,
-  peekable, joinable — never the bottom pty panel. The input is
-  `server/cli-input.js` `BoxedInput` — a raw-mode line
-  editor that draws the prompt inside a rounded box: live status strip above
-  (daemon sessions polled ~2.5s, animated spinner dot = working, `●` idle,
-  `○` sleeping, `session.prompt` = purpose), context+hint row below
-  (agent · cwd, localized via `cli-i18n` sh* keys), inline `/` command
-  suggestions under the box (Enter runs no-arg picks, args commands stay
-  editable, Tab completes, esc dismisses, ↑↓ = history), ^C clears/^C or ^D
-  empty quits. Enter freezes the frame into the transcript and the editor
-  goes frozen — only ^C reaches `onSigint` while a turn runs. Overlays park
-  it via `stop()`/`start()` (same object's history survives — `stop()` also
-  pauses stdin and leaves raw mode, so every overlay/exit must re-resume or
-  no open handle keeps the process alive; the shell's teardown relies on
-  that plus `DaemonLink.close()` rejecting pending calls to avoid the
-  "prints bye, never exits" pin). **Tab** on an
-  empty buffer opens the fleet overlay (live list, Enter attaches, `w`
-  wakes, `r` removes, esc backs out). Command output goes through `print()`
-  → `input.reprint()` which wipes the block, prints, re-glues; a localized
-  "thinking…" spinner row runs until the agent's first output byte. Every
-  shell-rendered row must be `fit()` to the terminal width and the fleet
-  overlay pages to terminal height — one wrapped row corrupts the
-  cursor-up redraw math. The
-  same ops are scriptable as `harpy team ls|up|say|rm|down|sessions`
-  (`--port N` supported) — the surface agent CLIs drive;
-  `server/agent-skills.js` installs `skills/harpy/SKILL.md` onto
-  `~/.agents/skills/harpy/` plus existing `~/.claude`/`~/.config/devin`
-  skill dirs at every daemon boot so bots learn to add/remove teammates
-  on their own. `harpy chat
-  [prompt] [-a agent] [--cwd dir]` is the flag-bearing entry — with a
-  prompt (or piped stdin) it is a one-shot turn, otherwise the REPL.
-  `harpy dash` keeps the old status menu. Continuations capture the
-  provider's session id (`meta` events: codex `thread.started`, claude
-  `system/init`) and resume it directly — `--last`-style fallbacks could
-  attach to an unrelated daemon session.
-- `src/` — Preact frontend. Entry `src/main.jsx` → `App.jsx`. State via
-  `@preact/signals` (`src/state/`). Styling is **Tailwind v4** through
-  `@tailwindcss/vite` (CSS entry `src/styles/tailwind.css`), not a tailwind config.
-- `scripts/` — standalone smoke scripts (no npm wiring).
-- `docs/superpowers/{specs,plans}/` — design docs.
-- `public/` — static assets incl. `sw.js`, registered in prod by `src/main.jsx`.
-- `dist/` and `harpy-projects/` are gitignored — never commit either.
+### Auth & Permissions (`server/auth.js`, `server/workspace.js`)
+- First run requires `POST /api/auth/setup`, password ≥ 6 chars. State in `auth.json` (0600).
+- Tokens: JWT (24h TTL) or API keys `hp_...`. Roles `owner`, `admin`, `member`.
+- **The `pty` channel is admin-only wholesale** — a PTY is a daemon-user host shell; project allowlists must never grant it. `agent` is `requireAccess` + `requireSelfOrAdmin` and is gated by `workspaceRoot(ws, ctx)`; `fs`/`git`/`project`/`automation` mix per-op `requireAccess`/`requireAdmin` with `workspaceRoot`.
+- Canonicalization goes through `workspaceRoot()` / `workspacePath()` — never join user-supplied paths yourself.
 
-## Agent adapters
+### Skills & Memory (`server/skill-context.js`, `server/skills.js`, `server/handoffs.js`)
+- Skill discovery scans task cwd `.agents/skills/*/SKILL.md`, legacy `.claude/skills/*/SKILL.md`, and bundled `skills/harpy`. Reads only bounded leading YAML frontmatter (capped at 4 KiB context budget). Symlinks outside root are rejected.
+- Runner injects skill context into prompt-bearing launches and fresh headless turns; blank interactive launches stay blank (raw keystrokes are never rewritten).
+- Skill manager (`server/skills.js`): workspace skills install to `.agents/skills/`; user-scoped skills install to agent-specific dirs under user home (requires private home if non-admin). Strictly validates repo URLs, names, and symlinks.
+- Durable project facts live in `<workspace>/.harpy/MEMORY.md`, session snapshots in `.harpy/handoffs/INDEX.md`. Session-end memory digest is off by default (`/memory digest on`).
+- Root `AGENTS.md` bottom block (`<!-- harpy:memory -->`) is managed by `server/handoffs.js:ensureAgentsPointer` — keep markers intact.
 
-Eight adapters live in `server/agents/adapters/`: `harpy` (the built-in
-shell — `static builtin = true`, `cli = process.execPath` + `cli.js chat`,
-never PATH-probed, always available, skipped by the shell's own `/use`
-listing), `claude`,
-`codex`, `devin`, `gemini`, `qwen`, `opencode`, `grok`. The rest wrap an
-external CLI
-detected via a PATH scan (`server/util/env.js` builds a service-friendly PATH
-from the login shell plus well-known dirs, also used for agent/pty spawn env);
-`available` is false if the binary is missing. `harpy`, `claude` and `devin`
-set `interactive: true`. `buildResumeArgs` re-spawns a daemon PTY session after a
-restart; `buildContinueArgs({prompt, sessionId})` is the shell's headless
-follow-up path — adapters that can target a conversation id (codex
-`thread.started`, claude `system/init`, opencode JSONL `sessionID`) resume it
-directly rather than a global `--last`/`--continue`, which can attach to an
-unrelated session; `captureSessionId({cwd})` covers CLIs whose output carries
-no id (devin re-reads `devin list --format json` for the newest session).
-An adapter's `spawnEnv()` adds per-CLI env at every spawn path (PTY session,
-shell headless turn, memory digest) — claude uses it to set `IS_SANDBOX=1`
-when the daemon runs as root, which is claude's documented opt-in for
-`--dangerously-skip-permissions` under root/sudo.
-Each adapter may also declare `static
-install` (`{ command, windows? }`) — the CLI's one-line installer, shown in
-the new-session modal so an unavailable agent can be installed in a visible
-terminal. Detection results are cached in `$HARPY_HOME/agent-availability.json`
-for 24h (probing scans the login-shell/known-dir PATH, not just the service
-PATH); `agent.agents` with `{ refresh: true }` forces a re-check (the shell
-exposes it as `/agents refresh` for CLIs installed after the first probe),
-the server
-re-probes hourly and broadcasts `agent.agents` when availability changes,
-and opening the new-session modal triggers a fresh check. Adding a
-9th requires updating `registerAllAdapters` **and** the `agents.length !== 8`
-assertion in `scripts/smoke.mjs`.
+### CLI Shell & Terminal Redraws (`server/cli-shell.js`, `server/cli-input.js`, `server/cli-ui.js`)
+- **Row fitting:** any row later redrawn with `\x1b[nA` MUST be formatted through `fit()` (`cli-ui.js:36`) to `process.stdout.columns`. A wrapped row corrupts cursor math and duplicates text on every keystroke.
+- **Keypress sink:** `emitKeypressEvents` drops its `data` consumer when `keypress` listener count hits 0. `BoxedInput.start()` attaches a permanent no-op sink; overlay listeners must attach *before* their first `await`.
+- **Interactive pickers** (`choose`/`ask`/`toggleMenu`/`linkPickSession`) leave stdin cooked+paused on return — call them inside the shell only via `park(fn)`.
+- **Loopback auth:** the shell reaches the daemon over WS with the ephemeral key at `$HARPY_HOME/daemon/cli.key` (0600).
+- `skills/harpy/SKILL.md` is copied onto agent skill paths at every daemon boot (`server/agent-skills.js`) — `~/.agents/skills/harpy/` always, plus `~/.claude/...` and `~/.config/devin/...` only if those dirs already exist.
 
-**Preferred agent.** `cli.json`'s `agent` key (written by `/use`, the
-first-run picker, or `harpy settings set agent`) is the operator's chosen
-chat CLI. `preferredAgentId()` in `server/agents/adapter.js` resolves it:
-saved pick when installed, else first available non-builtin. The shell's
-first run asks once via a `choose()` picker (an installed binary is not a
-subscribed account — never silently default to whichever CLI probed first),
-`agent.agents` marks it `preferred: true` for the web panel, and internal
-spawns resolve through it: an automation `.md` with no `agent:` field runs
-on the preferred agent, and the memory digest tries it right after the
-ended session's own CLI.
+### Daemon & Process Management (`server/daemon.js`)
+- The pidfile (`$HARPY_HOME/daemon/harpy.pid`) covers only daemon-managed instances; foreground `harpy start` writes no state file.
+- Port sweeps are by **identity**: `killPortHolder()` only kills a holder whose `/api/health` returns `{name:'harpy'}`. Never kill an unrecognized service, and never trust the pidfile alone for stop/start.
+- Start/stop must route through the owning supervisor (`systemdUnit()` / `launchctl bootstrap|bootout`) when one exists; a bare kill races `KeepAlive` respawns.
 
-## Auth & config
+### Public Tunnels & Share Channel (`server/share.js`)
+- Detached providers: cloudflared, `ssh -R` (sish relay), ngrok, zrok, bore.dk. State in `$HARPY_HOME/share.json`.
+- bore.dk specifics: `sweepStrayProviderDaemons()` kills stray bore daemons (SIGTERM → SIGKILL after 2s, verified via `/proc` cmdline); failed `bore up` must call `reapSpawnedDaemons()`; `boreRuntime()` self-heals truncated `runtime.json` and quarantines unparseable files; `resolve({port})` matches **strictly by port** (the old `|| active[0]` fallback adopted another backend's URL) and accepts both `daemonPid` and newer `guiPid`; `pruneConflictingBoreTunnels()` must strip stale `~/.bore/config.json` registrations for the same subdomain *before* claiming the tunnel (bore's `desiredTunnels` is a list it re-publishes on every sync, so a leftover entry for a dead port splits traffic — plain requests work, WS upgrades fail).
+- Diagnostic tell: bore returns `502` with body `local websocket upgrade failed with status 401` when harpy rejects the credential — a 401 disguised as a transport error ("WebSocket failed" on some devices only).
 
-- First run requires setup: `POST /api/auth/setup` with a password >= 6 chars.
-  State lives in `$HARPY_HOME/auth.json` (default `~/.harpy/`, mode 0600).
-- Auth accepts JWT bearer tokens (24h TTL) **or** API keys (`hp_…`, issued via
-  `/api/auth/keys`). WS auth passes the token as `?token=` on the `/ws` URL.
-- Session expiry: JWTs live 24h. Client-side `ws.js` reads `exp` before each
-  connect, probes `/api/auth/me` once when an upgrade is refused, and any
-  non-login REST 401 clears the token — all paths fire `harpy:auth-expired`,
-  which `App.jsx` listens for to drop back to `AuthGate`. Reconnects use
-  capped exponential backoff (~1s→15s + jitter); `ws.close()` is re-armable —
-  `connect()` clears the flag so the "server unavailable → retry" path can
-  reopen the socket. Half-open tunnels (edge drops that keep TCP "open" but
-  blackhole frames) are detected client-side: `ws.js` sends an app-level
-  `{ch:'sys', op:'ping'}` every 15s (the hub answers it before channel
-  routing — browsers can't emit protocol pings) and force-closes the socket
-  after ~30s of total inbound silence, letting backoff rebuild it; views
-  re-hydrate on `harpy:ws-open`. Server-side, the hub pings every 30s with
-  a 30s pong budget, terminates peers whose `bufferedAmount` exceeds 4 MiB,
-  and negotiates `perMessageDeflate` (>1 KiB frames) so terminal bursts
-  cross the tunnel compressed. Both `pty` and `agent` session output is
-  coalesced ~16ms per chunk before framing.
-- Per-user CLI environment: `cli-env.json` (0600) maps each `sub` to
-  `{env: {KEY: value}, home: bool}`. `cliEnvFor(sub)` merges those vars over
-  the daemon env at every spawn (`agent` runner + `pty` channel) — a user with
-  no record inherits the shared daemon credentials; `home:true` gives them a
-  private `cli-home/<sub>` HOME (0700, lazily created) so CLI logins/configs
-  don't collide. `agent.cliEnv`/`agent.saveCliEnv` ops are per-user and take
-  an admin-only `for: <sub>` to manage a member's record (UserManager's
-  "Private CLI home" toggle drives this); values are write-only (names only
-  in responses). `PATH`/`HOME`/`USER`/`LOGNAME`/`SHELL` overrides are
-  rejected — HOME is the flag's job.
-- Multi-account access: `auth.json` keeps the owner account plus `users[]`
-  (admin-created, `role` `admin`/`member`, `projects`/`agents` allowlists —
-  `null` means unrestricted — and `disabled`). `resolvePrincipal` maps tokens to
-  live users so disable/delete revokes mid-session; `accessFor(ctx)` is checked
-  per op. `workspaceRoot(ws, ctx)` enforces the project allowlist across
-  fs/git/pty/agent channels; `project` create/open/clone/browse and API-key +
-  user management ops are admin-only. Members see filtered `project.list` /
-  `agent.agents`, and `pty`/`agent` sessions stay isolated per `sub:clientId`.
-- Env (see `server/config.js`): `PORT`/`HARPY_PORT` (3001), `HARPY_HOST`
-  (`0.0.0.0`), `HARPY_HOME` (auth dir), `HARPY_PROJECTS` (projects dir,
-  default `./harpy-projects`), `HARPY_WORKSPACE` (pin a single external
-  workspace instead of numbered projects).
-- GitHub sign-in has three tiers. Primary: **web OAuth** — `git.oauthStart`
-  returns the app's authorize URL; GitHub redirects the browser to
-  `/api/git/oauth/callback`, where `webComplete` swaps the code for a user
-  token and adopts the profile. Requires a stored `clientId` + `clientSecret`
-  (0600 `$HARPY_HOME/git-oauth.json`), produced automatically by the
-  manifest bootstrap (`git.appBootstrap` → `/api/git/app/callback` — the
-  manifest also registers the callback URL). Fallbacks: **device flow**
-  (`git.deviceStart`/`devicePoll`, needs the app owner's manual Device-Flow
-  opt-in — GitHub exposes no API for it) and manual PAT paste. A client_id
-  saved without a secret (legacy or `HARPY_GITHUB_CLIENT_ID` /
-  `git.saveOauthClientId`) can only use device flow.
+### Automations (`server/automations.js`)
+- Markdown + frontmatter under `$HARPY_HOME/automations/<ws-hash>/*.md`. Triggers: `fs`, `cron`, `webhook`, `session-end`. Optional `gate:` shell command must exit 0 to proceed.
+- Isolated runs execute in detached git worktrees under `$HARPY_HOME/worktrees/`.
 
-## Conventions
+## Code & Conventions
 
-- `"type": "module"` — every `.js` file is ESM; use `import`/`export`, never `require`.
-- ESLint: `no-unused-vars` is an error (prefix unused args with `_`); `no-console`
-  is off; browser + node globals both on; `sourceType: module`, JSX enabled.
-- Frontend is Preact, not React — import from `preact`/`@preact/*`, not `react`.
-- `harpy-projects/` holds managed per-user project workspaces selected via the
-  title bar; their contents are runtime data, not part of this repo's source.
-
+- **ESM only** (`"type": "module"`): `import`/`export`, never `require`.
+- **New backend surface is usually a new op on an existing channel** in `server/channels/`, not a REST route.
+- **Frontend is Preact**, not React — import from `preact` / `@preact/*`; state in `@preact/signals`. Entry `src/main.jsx` → `src/App.jsx`, panes in `src/components/`, wire/helpers in `src/lib/`.
+- **Styling:** Tailwind v4 via `@tailwindcss/vite`, entry `src/styles/tailwind.css`; there is **no** `tailwind.config.js`. Long-standing custom rules live in `src/styles/global.css`.
+- **UI Translations:** UI strings live in `src/i18n/locales/*.json`; `en.json` is the source of truth and fallback.
+- **Lint gotcha:** `no-unused-vars` is `argsIgnorePattern: '^_'` — only *function arguments* may be prefixed with `_`. An unused local/const named `_x` still errors.
+- ESLint ignores `dist/**`, `node_modules/**`, `scripts/sync-version.mjs`, `scripts/check-version-sync.mjs`.
+- **Gitignored runtime artifacts:** `dist/`, `harpy-projects/`, `.harpy/`. Never commit them. Note this means `.harpy/` (memory + handoffs) is local-only, so durable gotchas must also land here.
 
 <!-- harpy:memory -->
-This workspace uses Harpy: before starting work, read `.harpy/MEMORY.md` — the project's persistent memory — and update it with durable conventions, decisions, or gotchas (never chat logs or task progress). Recent session snapshots live under `.harpy/handoffs/` (start with `INDEX.md`).
+This workspace uses Harpy: read `.harpy/MEMORY.md` and update durable facts, not task logs. Session snapshots: `.harpy/handoffs/INDEX.md`. Discover reusable procedures in `.agents/skills/*/SKILL.md` (legacy `.claude/skills` supported); read only matching skills. Within the existing task, create/update a concise skill only for a verified repeatable procedure (name/description frontmatter, steps, verification). Do not auto-install remote skills or make extra model calls for learning.
 <!-- /harpy:memory -->

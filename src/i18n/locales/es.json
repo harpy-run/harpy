@@ -301,7 +301,7 @@
   "skills.agent": "Agente",
   "skills.scope": "Ámbito",
   "skills.scopeUser": "Home del usuario",
-  "skills.scopeWorkspace": "Workspace (.claude/skills)",
+  "skills.scopeWorkspace": "Workspace (.agents/skills)",
   "skills.forUser": "Para usuario",
   "skills.self": "Yo mismo",
   "skills.repoPlaceholder": "owner/repo o URL git https://",

@@ -38,7 +38,10 @@ durable — a coding convention, a decision and the reason behind it, a
 gotcha that cost time, an environment quirk — record it under the
 matching heading below, one line per entry. Do NOT store session logs,
 chat transcripts, or task progress here; ephemeral state belongs in
-.harpy/handoffs/ session snapshots.
+.harpy/handoffs/ session snapshots. Verified repeatable procedures belong
+in .agents/skills/<name>/SKILL.md (name/description frontmatter, steps,
+verification), not duplicated here. Learn during the existing task; no
+separate model run is required.
 -->
 
 ## Conventions
@@ -58,7 +61,11 @@ This workspace runs on Harpy. Before starting work, read
 \`.harpy/MEMORY.md\` — the project's persistent memory — and update it
 when you learn durable conventions, decisions, or gotchas (never chat
 logs). Recent session snapshots live under \`.harpy/handoffs/\`
-(start with \`INDEX.md\`).
+(start with \`INDEX.md\`). Read relevant procedures from
+\`.agents/skills/*/SKILL.md\` (legacy \`.claude/skills\` also supported)
+only when their descriptions match the task. During the existing task,
+create or update a concise skill only for a verified reusable procedure;
+keep durable project facts in memory and never auto-install remote skills.
 `
 
 // TUI chrome glyphs: Braille spinner cells, box drawing, blocks/shading,
@@ -144,9 +151,9 @@ function migrateMemory(file) {
       const end = content.indexOf(SESSIONS_END) + SESSIONS_END.length
       content = (content.slice(0, start) + content.slice(end)).replace(/## Recent sessions\s*$/m, '')
     }
-    // No sections means the file still holds only the old prose seed.
-    if (!/^## /m.test(content)) {
-      if (content === MEMORY_SEED || !fs.existsSync(file)) return
+    // Heading-free prose may be human-authored memory, not an empty seed.
+    // Preserve it; scaffold sections only when the file is genuinely empty.
+    if (!content.trim()) {
       fs.writeFileSync(file, MEMORY_SEED, { mode: 0o644 })
       return
     }
@@ -156,7 +163,7 @@ function migrateMemory(file) {
 }
 
 const AGENTS_BLOCK = `${AGENTS_BLOCK_START}
-This workspace uses Harpy: before starting work, read \`.harpy/MEMORY.md\` — the project's persistent memory — and update it with durable conventions, decisions, or gotchas (never chat logs or task progress). Recent session snapshots live under \`.harpy/handoffs/\` (start with \`INDEX.md\`).
+This workspace uses Harpy: read \`.harpy/MEMORY.md\` and update durable facts, not task logs. Session snapshots: \`.harpy/handoffs/INDEX.md\`. Discover reusable procedures in \`.agents/skills/*/SKILL.md\` (legacy \`.claude/skills\` supported); read only matching skills. Within the existing task, create/update a concise skill only for a verified repeatable procedure (name/description frontmatter, steps, verification). Do not auto-install remote skills or make extra model calls for learning.
 ${AGENTS_BLOCK_END}`
 
 // A root AGENTS.md is the channel that teaches agents about the memory —
@@ -172,7 +179,16 @@ function ensureAgentsPointer(workspace) {
     const file = path.join(workspace, 'AGENTS.md')
     if (fs.existsSync(file)) {
       const content = fs.readFileSync(file, 'utf8')
-      if (content.includes(AGENTS_BLOCK_START) || content.trim() === AGENTS_POINTER.trim()) return
+      if (content.trim() === AGENTS_POINTER.trim()) return
+      const start = content.indexOf(AGENTS_BLOCK_START)
+      if (start >= 0) {
+        const end = content.indexOf(AGENTS_BLOCK_END, start + AGENTS_BLOCK_START.length)
+        // Never repair malformed markers by consuming human-authored text.
+        if (end < 0 || content.indexOf(AGENTS_BLOCK_START, start + AGENTS_BLOCK_START.length) >= 0) return
+        const updated = content.slice(0, start) + AGENTS_BLOCK + content.slice(end + AGENTS_BLOCK_END.length)
+        if (updated !== content) fs.writeFileSync(file, updated, { mode: 0o644 })
+        return
+      }
       fs.appendFileSync(file, `\n\n${AGENTS_BLOCK}\n`, { mode: 0o644 })
       return
     }

@@ -105,15 +105,18 @@ async function runAgentTurn(state, text) {
   const AdapterClass = state.adapters.get(state.agent)
   if (!AdapterClass) throw new Error(`no agent selected — /use picks one, /agents lists installers`)
   const adapter = new AdapterClass()
-  // Fresh conversations still scaffold .harpy/ + the AGENTS.md pointer —
-  // the pointer is the memory channel; nothing is prepended to the prompt.
-  if (state.fresh) {
+  // Only genuine continuations already know the catalog. Adapters without
+  // headless resume need fresh context even after a successful previous turn.
+  let args = state.fresh ? null : adapter.buildContinueArgs({ prompt: text, sessionId: state.agentSession })
+  if (!args) {
     const { ensureMemory } = await import('./handoffs.js')
-    ensureMemory(state.cwd, 'owner')
+    const { withSkillContext } = await import('./skill-context.js')
+    const memory = ensureMemory(state.cwd, 'owner')
+    args = adapter.buildArgs({ prompt: withSkillContext(text, {
+      workspace: state.cwd, cwd: state.cwd,
+      memoryPath: memory ? path.resolve(state.cwd, memory) : null
+    }) })
   }
-  const args = state.fresh
-    ? adapter.buildArgs({ prompt: text })
-    : (adapter.buildContinueArgs({ prompt: text, sessionId: state.agentSession }) ?? adapter.buildArgs({ prompt: text }))
   const env = await enhancedEnv(adapter.spawnEnv?.() || {})
   // Windows shims (.cmd) cannot exec directly — resolveCommand wraps them in
   // cmd.exe and the verbatim flag passes the pre-escaped line untouched.

@@ -7,12 +7,13 @@ import '@xterm/xterm/css/xterm.css'
 import { ws, isConnectionError } from '../lib/ws.js'
 import { t } from '../lib/i18n.js'
 import { useEscape } from '../lib/useEscape.js'
-import { isAdmin, mobileTab, panelOpen, terminalFontSize, terminalScrollSpeed, theme, workspace } from '../state/app.js'
+import { isAdmin, mobileTab, paneAreaVisible, panelOpen, terminalFontSize, terminalScrollSpeed, theme, workspace } from '../state/app.js'
 import { terminalFont, terminalTheme } from '../lib/terminal-theme.js'
 import { attachFastRenderer } from '../lib/terminal-renderer.js'
 import { watchTerminalResize } from '../lib/terminal-resize.js'
 import { attachTerminalTouchScroll } from '../lib/terminal-touch.js'
 import { attachTerminalKeys } from '../lib/terminal-keys.js'
+import { copyTerminalSelection } from '../lib/terminal-clipboard.js'
 import { TerminalScrollButtons } from './TerminalScrollButtons.jsx'
 import { TerminalSearchBox } from './TerminalSearch.jsx'
 import { TInput } from './Fields.jsx'
@@ -22,7 +23,7 @@ import { createTerminalOutputQueue } from '../lib/terminal-output.js'
 function TerminalView({ id, workspaceKey: viewWorkspaceKey, onReady, modifiersRef }) {
   const host = useRef(null)
   const terminalRef = useRef(null)
-  const fitRef = useRef(null)
+  const resizeRef = useRef(null)
   const searchRef = useRef(null)
   const [searchOpen, setSearchOpen] = useState(false)
   const [terminalInstance, setTerminalInstance] = useState(null)
@@ -37,6 +38,7 @@ function TerminalView({ id, workspaceKey: viewWorkspaceKey, onReady, modifiersRe
       cursorBlink: true,
       disableStdin: false,
       scrollOnUserInput: true,
+      scrollOnEraseInDisplay: true,
       scrollback: 5_000,
       theme: terminalTheme(theme.value)
     })
@@ -51,14 +53,13 @@ function TerminalView({ id, workspaceKey: viewWorkspaceKey, onReady, modifiersRe
       clearSelection: () => terminal.clearSelection()
     })
     const fit = new FitAddon()
-    fitRef.current = fit
     terminal.loadAddon(fit)
     const search = new SearchAddon()
     searchRef.current = search
     terminal.loadAddon(search)
     terminal.open(host.current)
     attachFastRenderer(terminal)
-    attachTerminalKeys(terminal)
+    const stopKeys = attachTerminalKeys(terminal, { isModified: () => !!modifiersRef?.current })
     const stopTouchScroll = attachTerminalTouchScroll(host.current, terminal, () => terminalScrollSpeed.value)
     // Auto-focus only on fine-pointer devices; on touch, focusing at mount
     // opens the keyboard before the user even asks to type.
@@ -85,15 +86,18 @@ function TerminalView({ id, workspaceKey: viewWorkspaceKey, onReady, modifiersRe
     }
     host.current.addEventListener('click', focusTerminal)
     host.current.addEventListener('harpy:terminal-touch-consumed', consumeTouchGesture)
-    const stopResizeWatcher = watchTerminalResize(host.current, fit, terminal, (cols, rows) => {
-      ws.request('pty', 'resize', { id, cols, rows }).catch(() => {})
-    })
     const isViewVisible = () => {
       const compact = window.matchMedia?.('(max-width: 767px)').matches || false
       return workspaceKey() === viewWorkspaceKey && (!compact || isAdmin.value) && (compact
         ? mobileTab.value === 'terminal'
         : panelOpen.value)
     }
+    const canResize = () => isViewVisible()
+      && (window.matchMedia?.('(max-width: 767px)').matches || !paneAreaVisible.value)
+    const stopResizeWatcher = watchTerminalResize(host.current, fit, terminal, (cols, rows) => {
+      ws.request('pty', 'resize', { id, cols, rows }).catch(() => {})
+    }, canResize)
+    resizeRef.current = stopResizeWatcher
     let viewVisible = isViewVisible()
     let hydrated = false
     let hydrating = false
@@ -197,7 +201,7 @@ function TerminalView({ id, workspaceKey: viewWorkspaceKey, onReady, modifiersRe
       requestAnimationFrame(() => {
         try {
           const rect = host.current?.getBoundingClientRect()
-          if (!rect || rect.width < 4 || rect.height < 4) return
+          if (!canResize() || !rect || rect.width < 4 || rect.height < 4) return
           fit.fit()
           if (event.detail?.open && wasAtLiveEdge) terminal.scrollToBottom()
           stopResizeWatcher.refresh?.()
@@ -219,6 +223,7 @@ function TerminalView({ id, workspaceKey: viewWorkspaceKey, onReady, modifiersRe
     return () => {
       stopResizeWatcher()
       stopTouchScroll()
+      stopKeys()
       host.current?.removeEventListener('click', focusTerminal)
       host.current?.removeEventListener('harpy:terminal-touch-consumed', consumeTouchGesture)
       clearTimeout(touchClickTimer)
@@ -232,7 +237,7 @@ function TerminalView({ id, workspaceKey: viewWorkspaceKey, onReady, modifiersRe
       window.removeEventListener('harpy:terminal-search', toggleSearch)
       terminal.dispose()
       terminalRef.current = null
-      fitRef.current = null
+      resizeRef.current = null
       onReady?.(null)
     }
   }, [id, viewWorkspaceKey, onReady])
@@ -240,24 +245,14 @@ function TerminalView({ id, workspaceKey: viewWorkspaceKey, onReady, modifiersRe
   useEffect(() => {
     if (terminalRef.current) {
       terminalRef.current.options.theme = terminalTheme(theme.value)
-      requestAnimationFrame(() => {
-        try {
-          fitRef.current?.fit()
-          ws.request('pty', 'resize', { id, cols: terminalRef.current.cols, rows: terminalRef.current.rows }).catch(() => {})
-        } catch { /* terminal is switching */ }
-      })
+      resizeRef.current?.refresh?.()
     }
   }, [theme.value, id])
 
   useEffect(() => {
     if (terminalRef.current) {
       terminalRef.current.options.fontSize = terminalFontSize.value
-      requestAnimationFrame(() => {
-        try {
-          fitRef.current?.fit()
-          ws.request('pty', 'resize', { id, cols: terminalRef.current.cols, rows: terminalRef.current.rows }).catch(() => {})
-        } catch { /* terminal is switching */ }
-      })
+      resizeRef.current?.refresh?.()
     }
   }, [terminalFontSize.value, id])
 
@@ -358,7 +353,8 @@ export function TerminalAccessory({ actionsRef, modifiersRef, terminalId }) {
   }
 
   function sendControl(letter) {
-    send(String.fromCharCode(letter.toUpperCase().charCodeAt(0) - 64))
+    if (letter.toLowerCase() === 'c' && actionsRef.current?.selection()) copySelection()
+    else send(String.fromCharCode(letter.toUpperCase().charCodeAt(0) - 64))
     setCtrl(false)
     modifiersRef.current = false
   }
@@ -370,14 +366,13 @@ export function TerminalAccessory({ actionsRef, modifiersRef, terminalId }) {
     } catch { /* clipboard read needs a gesture / permission */ }
   }
 
-  async function copySelection() {
+  function copySelection() {
     const actions = actionsRef.current
-    const selected = actions?.selection()
-    if (!selected) return
-    try {
-      await navigator.clipboard.writeText(selected)
-      actions.clearSelection()
-    } catch { /* clipboard access needs a secure context / permission */ }
+    if (!actions) return
+    copyTerminalSelection({
+      getSelection: () => actions.selection(),
+      clearSelection: () => actions.clearSelection()
+    })
   }
 
   function toggleExpanded() {

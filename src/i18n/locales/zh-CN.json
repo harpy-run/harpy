@@ -301,7 +301,7 @@
   "skills.agent": "代理",
   "skills.scope": "范围",
   "skills.scopeUser": "用户主目录",
-  "skills.scopeWorkspace": "工作区 (.claude/skills)",
+  "skills.scopeWorkspace": "工作区 (.agents/skills)",
   "skills.forUser": "目标用户",
   "skills.self": "我自己",
   "skills.repoPlaceholder": "owner/repo 或 https:// git URL",

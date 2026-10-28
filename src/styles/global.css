@@ -2477,7 +2477,7 @@ vscode-badge, .git-count, .git-badge, .agent-presence-count,
 }
 
 /* The terminal owns every touch gesture inside its box — terminal-touch.js
-   translates drags into wheel events for scrollback and mouse TUIs. */
+   uses xterm's scroll APIs for history and wheel events for mouse TUIs. */
 .terminal-host .xterm, .agent-terminal-host .xterm,
 .terminal-host .xterm-screen, .agent-terminal-host .xterm-screen,
 .terminal-host canvas, .agent-terminal-host canvas {
@@ -2485,34 +2485,24 @@ vscode-badge, .git-count, .git-badge, .agent-presence-count,
   -webkit-touch-callout: none;
 }
 
-.terminal-host .xterm-viewport, .agent-terminal-host .xterm-viewport {
-  overflow-y: auto !important;
-  overflow-x: hidden;
+/* xterm 6 owns a virtual scrollbar; DOM overflow overrides would create a
+   second scroll position independent of the terminal's buffer. */
+.terminal-host .xterm-scrollable-element, .agent-terminal-host .xterm-scrollable-element {
   overscroll-behavior: contain;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: auto;
-  scrollbar-color: var(--ui-slider) transparent;
 }
 
-/* xterm keeps its own scrollbar element — give it a real track width so it is
-   grabbable on desktop instead of the default hairline. */
-.terminal-host .xterm-viewport::-webkit-scrollbar,
-.agent-terminal-host .xterm-viewport::-webkit-scrollbar { width: 12px; }
+.terminal-host .xterm-scrollable-element > .scrollbar.vertical,
+.agent-terminal-host .xterm-scrollable-element > .scrollbar.vertical {
+  background: color-mix(in srgb, var(--ui-bg) 55%, transparent);
+}
 
-.terminal-host .xterm-viewport::-webkit-scrollbar-track,
-.agent-terminal-host .xterm-viewport::-webkit-scrollbar-track { background: color-mix(in srgb, var(--ui-bg) 55%, transparent); }
-
-.terminal-host .xterm-viewport::-webkit-scrollbar-thumb,
-.agent-terminal-host .xterm-viewport::-webkit-scrollbar-thumb {
-  min-height: 28px;
-  border: 3px solid transparent;
+.terminal-host .xterm-scrollable-element > .scrollbar > .slider,
+.agent-terminal-host .xterm-scrollable-element > .scrollbar > .slider {
   border-radius: 8px;
-  background-clip: padding-box;
 }
 
 .terminal-host .xterm-screen, .agent-terminal-host .xterm-screen { max-width: 100%; }
 .xterm { min-width: 0; }
-.xterm-viewport { overscroll-behavior: none; }
 
 /* Touch scrollbar — mobile overlay scrollbars cannot be grabbed, so the
    terminal renders its own thumb along the right edge on coarse pointers. */
@@ -2582,6 +2572,10 @@ vscode-badge, .git-count, .git-badge, .agent-presence-count,
 /* On touch the arrows sit in the bottom corner — the centered position would
    block the middle of the draggable scrollbar. */
 @media (pointer: coarse) {
+  /* The wider touch thumb owns this edge; xterm's desktop thumb otherwise
+     sits above it and intercepts drags when both scrollbars are visible. */
+  .terminal-host .xterm-scrollable-element > .scrollbar.vertical,
+  .agent-terminal-host .xterm-scrollable-element > .scrollbar.vertical { display: none; }
   .terminal-scroll-buttons { top: auto; bottom: 20px; transform: none; }
 }
 

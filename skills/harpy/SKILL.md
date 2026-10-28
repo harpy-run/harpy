@@ -31,10 +31,14 @@ Run these directly — they are plain non-interactive subcommands:
 
 Every workspace has `.harpy/MEMORY.md` — curated project memory shared by
 all bots — plus `.harpy/handoffs/` snapshots written when a session stops
-(newest first in `INDEX.md`). Bots get the memory contents in their launch
-prompt automatically; a finishing session's durable findings are distilled
-into MEMORY.md by a background digest. The owner toggles it in the shell
-with `/memory` — when it is off, do not try to recreate `.harpy/` files.
+(newest first in `INDEX.md`). Prompt-bearing launches receive a memory
+path and bounded skill metadata, not full file contents. Read relevant
+files on demand. During the existing task, record durable facts in memory;
+verified reusable procedures belong in `.agents/skills/<slug>/SKILL.md`
+with name/description frontmatter, steps and verification. Do not create
+skills for one-off progress or automatically install remote collections.
+Background digest is opt-in via `/memory digest` and spends extra CLI quota.
+The owner toggles memory with `/memory` — when off, do not recreate `.harpy/`.
 
 ## Working honestly
 

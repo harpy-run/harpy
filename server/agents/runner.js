@@ -14,7 +14,8 @@ import { projectIdForPath, workspaceCwd, workspaceRoot } from '../workspace.js'
 import { recordActivity } from '../activity.js'
 import { pinFsWatcher, unpinFsWatcher } from '../channels/fs.channel.js'
 import { ensureMemory, tailFromHistory, writeHandoff } from '../handoffs.js'
-import { runMemoryDigest } from '../memory.js'
+import { runMemoryDigest, memoryEnabledFor } from '../memory.js'
+import { withSkillContext } from '../skill-context.js'
 import { notifyWebhook } from '../notify.js'
 
 const execFileAsync = promisify(execFile)
@@ -377,6 +378,9 @@ async function respawnSession(session, { resume, reason } = {}) {
   if (resume) {
     try { args = session.adapter.buildResumeArgs?.() || null } catch { args = null }
   }
+  // A fresh fallback needs context on its next logical task, but never
+  // type setup text into a resumed provider TUI unprompted.
+  session.skillContextSent = !!args
   if (!args) args = session.adapter.buildTerminalArgs({ prompt: '' })
   emit(session, {
     type: 'data',
@@ -495,10 +499,14 @@ export async function startRunner(ctx, { agent, prompt = '', cwd, workspace, col
   // spawn so the files exist by the time the agent's first prompt arrives —
   // unless the session owner opted out of workspace memory entirely.
   const sessionOwner = ownerKey(ctx)
-  ensureMemory(requestedWorkspace, sessionOwner)
-  // The root AGENTS.md pointer is the only memory channel — every agent CLI
-  // auto-loads it, so nothing is injected into the user's prompt.
-  const initialPrompt = prompt
+  const taskCwd = workspaceCwd(requestedWorkspace, cwd, ctx, { allowOutside: !!automation && !!ctx?.automation })
+  const memory = ensureMemory(requestedWorkspace, sessionOwner)
+  // Builtin Harpy supplies context to its selected CLI itself. Blank TUI
+  // launches stay blank; a later logical send supplies the catalog instead.
+  const initialPrompt = AdapterClass.builtin ? prompt : withSkillContext(prompt, {
+    workspace: requestedWorkspace, cwd: taskCwd,
+    memoryPath: memory ? path.resolve(requestedWorkspace, memory) : null
+  })
   const index = nextSessionIndex(ctx, agent, requestedWorkspace)
   const session = {
     sessionId,
@@ -507,7 +515,8 @@ export async function startRunner(ctx, { agent, prompt = '', cwd, workspace, col
     // workspace root — the synthetic owner ctx already vetted the
     // definition. The ctx marker (not the client payload) is what unlocks
     // allowOutside, so a WS client cannot opt out by sending the flag.
-    state: { agent, cwd: workspaceCwd(requestedWorkspace, cwd, ctx, { allowOutside: !!automation && !!ctx?.automation }), status: 'running' },
+    state: { agent, cwd: taskCwd, status: 'running' },
+    skillContextSent: !!String(initialPrompt || '').trim(),
     // Capture the workspace at spawn time. Selecting another workspace must
     // never move or terminate an already running agent process.
     workspace: requestedWorkspace,
@@ -645,7 +654,12 @@ export function sendToRunner(ctx, sessionId, text) {
   if (session.state.status !== 'running' || !session.term) throw httpError(404, 'session not running')
   if (!String(text || '').trim()) throw httpError(400, 'text required')
   session.lastActivityAt = Date.now()
-  session.term.write(String(text) + '\r')
+  const message = session.skillContextSent || session.adapter.constructor.builtin ? String(text) : withSkillContext(String(text), {
+    workspace: session.workspace, cwd: session.state.cwd,
+    memoryPath: memoryEnabledFor(session.owner) ? path.join(session.workspace, '.harpy', 'MEMORY.md') : null
+  })
+  session.term.write(message + '\r')
+  session.skillContextSent = true
   return { ok: true }
 }
 

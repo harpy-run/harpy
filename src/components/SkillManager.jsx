@@ -1,17 +1,16 @@
-import { useEffect, useState } from 'preact/hooks'
-import { Download, RefreshCw, Trash2 } from '../lib/icons.jsx'
+import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
+import { Trash2 } from '../lib/icons.jsx'
 import { ws } from '../lib/ws.js'
 import { t } from '../lib/i18n.js'
 import { isAdmin, workspace } from '../state/app.js'
 import { VscSelect } from './vsc.jsx'
 import { TField } from './Fields.jsx'
 
-// Agent skills manager: installs SKILL.md collections from a git repo into
-// the selected agent's skills dir — the user's own (possibly private) home,
-// or the workspace's .claude/skills for project-scoped collections.
+// User installations are per adapter; workspace collections are neutral and
+// live in .agents/skills so every adapter can consume the same collection.
 export function SkillManager() {
   const [agents, setAgents] = useState([])
-  const [agent, setAgent] = useState('claude')
+  const [agent, setAgent] = useState('')
   const [scope, setScope] = useState('user')
   const [users, setUsers] = useState([])
   const [target, setTarget] = useState('')
@@ -21,75 +20,91 @@ export function SkillManager() {
   const [installing, setInstalling] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const workspacePath = workspace.value?.path || ''
+  const selectedTarget = scope === 'user' ? target : ''
+  const selection = JSON.stringify([agent, scope, selectedTarget, workspacePath])
+  const currentSelection = useRef({ key: selection, epoch: 0 })
+  if (currentSelection.current.key !== selection) {
+    currentSelection.current = { key: selection, epoch: currentSelection.current.epoch + 1 }
+  }
+  const selectionEpoch = currentSelection.current.epoch
+  const loadId = useRef(0)
+  const mounted = useRef(true)
 
   useEffect(() => {
+    mounted.current = true
     ws.request('agent', 'agents').then((list) => {
-      const known = (list || []).filter((item) => ['claude', 'devin'].includes(item.id))
-      setAgents(known.length ? known : [{ id: 'claude', label: 'claude' }])
-      if (known.length && !known.some((item) => item.id === agent)) setAgent(known[0].id)
-    }).catch(() => {})
+      if (!mounted.current) return
+      const known = Array.isArray(list) ? list : []
+      setAgents(known)
+      setAgent((current) => known.some((item) => item.id === current)
+        ? current : (known.find((item) => item.preferred)?.id || known[0]?.id || ''))
+    }).catch((requestError) => { if (mounted.current) setError(requestError.message) })
     if (isAdmin.value) {
-      ws.request('auth', 'users').then((list) => setUsers(Array.isArray(list) ? list : [])).catch(() => {})
+      ws.request('auth', 'users').then((list) => {
+        if (mounted.current) setUsers(Array.isArray(list) ? list : [])
+      }).catch(() => {})
     }
+    return () => { mounted.current = false; loadId.current++ }
   }, [])
 
-  useEffect(() => { load() }, [agent, scope, target])
-
-  async function load() {
-    setBusy(true)
+  const load = useCallback(async () => {
+    const id = ++loadId.current
+    const active = () => mounted.current && currentSelection.current.epoch === selectionEpoch && loadId.current === id
+    setSkills([])
     setError('')
+    if (!agent) { setBusy(false); return }
+    setBusy(true)
     try {
       const { skills: list } = await ws.request('agent', 'skills', {
-        agent,
-        scope,
-        for: target || undefined,
-        workspace: workspace.value?.path || ''
+        agent, scope, for: selectedTarget || undefined, workspace: workspacePath
       })
-      setSkills(list || [])
+      if (active()) setSkills(list || [])
     } catch (requestError) {
-      setSkills([])
-      setError(requestError.message)
+      if (active()) setError(requestError.message)
     } finally {
-      setBusy(false)
+      if (active()) setBusy(false)
     }
-  }
+  }, [agent, scope, selectedTarget, workspacePath, selectionEpoch])
+
+  useEffect(() => {
+    setNotice('')
+    load()
+    return () => { loadId.current++ }
+  }, [load])
 
   async function install() {
     const value = repo.trim()
-    if (!value || installing) return
+    if (!value || installing || !agent) return
+    const active = () => mounted.current && currentSelection.current.epoch === selectionEpoch
     setInstalling(true)
     setError('')
     setNotice('')
     try {
       const result = await ws.request('agent', 'skillInstall', {
-        agent,
-        scope,
-        for: target || undefined,
-        workspace: workspace.value?.path || '',
-        repo: value
+        agent, scope, for: selectedTarget || undefined, workspace: workspacePath, repo: value
       })
-      setRepo('')
-      setNotice(t('skills.installed', { count: result.count || 0 }))
-      await load()
+      if (active()) {
+        setRepo('')
+        setNotice(t('skills.installed', { count: result.count || 0 }))
+        await load()
+      }
     } catch (requestError) {
-      setError(requestError.message)
+      if (active()) setError(requestError.message)
     } finally {
-      setInstalling(false)
+      if (mounted.current) setInstalling(false)
     }
   }
 
   async function remove(name) {
+    const active = () => mounted.current && currentSelection.current.epoch === selectionEpoch
     try {
       await ws.request('agent', 'skillRemove', {
-        agent,
-        scope,
-        for: target || undefined,
-        workspace: workspace.value?.path || '',
-        name
+        agent, scope, for: selectedTarget || undefined, workspace: workspacePath, name
       })
-      setSkills((current) => current.filter((skill) => skill.name !== name))
+      if (active()) await load()
     } catch (requestError) {
-      setError(requestError.message)
+      if (active()) setError(requestError.message)
     }
   }
 
@@ -118,7 +133,7 @@ export function SkillManager() {
     )}
     <div class="settings-control-row">
       <TField class="skill-repo-input" value={repo} placeholder={t('skills.repoPlaceholder')} onInput={(event) => setRepo(event.currentTarget.value)} onKeyDown={(event) => { if (event.key === 'Enter') install() }} />
-      <vscode-button icon="cloud-download" disabled={!repo.trim() || installing} onClick={install}>{installing ? t('skills.installing') : t('skills.install')}</vscode-button>
+      <vscode-button icon="cloud-download" disabled={!agent || !repo.trim() || installing} onClick={install}>{installing ? t('skills.installing') : t('skills.install')}</vscode-button>
     </div>
     {error && <span class="error-text" role="alert">{error}</span>}
     {notice && <span class="skill-notice">{notice}</span>}

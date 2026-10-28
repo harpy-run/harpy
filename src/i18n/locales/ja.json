@@ -301,7 +301,7 @@
   "skills.agent": "エージェント",
   "skills.scope": "スコープ",
   "skills.scopeUser": "ユーザーホーム",
-  "skills.scopeWorkspace": "ワークスペース (.claude/skills)",
+  "skills.scopeWorkspace": "ワークスペース (.agents/skills)",
   "skills.forUser": "対象ユーザー",
   "skills.self": "自分",
   "skills.repoPlaceholder": "owner/repo または https:// git URL",

@@ -7,7 +7,7 @@ import '@xterm/xterm/css/xterm.css'
 import { ws, isConnectionError } from '../lib/ws.js'
 import { t } from '../lib/i18n.js'
 import { useEscape } from '../lib/useEscape.js'
-import { activeAgent, agentFullscreen, agentRailOpen, agentSessions, isAdmin, mobileTab, panelOpen, principal, terminalFontSize, terminalScrollSpeed, theme, workspace } from '../state/app.js'
+import { activeAgent, agentFullscreen, agentRailOpen, agentSessions, isAdmin, mobileTab, paneAreaVisible, panelOpen, principal, terminalFontSize, terminalScrollSpeed, theme, workspace } from '../state/app.js'
 import { terminalFont, terminalTheme } from '../lib/terminal-theme.js'
 import { attachFastRenderer } from '../lib/terminal-renderer.js'
 import { watchTerminalResize } from '../lib/terminal-resize.js'
@@ -82,7 +82,7 @@ function AgentLogo({ agent, size = 18 }) {
 function AgentTerminalView({ session, onStatus, onReady, modifiersRef, foreign = false, paneVisible }) {
   const host = useRef(null)
   const terminalRef = useRef(null)
-  const fitRef = useRef(null)
+  const resizeRef = useRef(null)
   const searchRef = useRef(null)
   const [searchOpen, setSearchOpen] = useState(false)
   const [terminalInstance, setTerminalInstance] = useState(null)
@@ -94,12 +94,28 @@ function AgentTerminalView({ session, onStatus, onReady, modifiersRef, foreign =
   const agentPaneVisible = () => paneVisible ?? (window.matchMedia?.('(max-width: 767px)').matches
     ? mobileTab.value === 'agent'
     : agentRailOpen.value)
+  // The desktop split/grid covers the classic rail without unmounting it.
+  // Keep subscription handling separate: both views share one WS watcher.
+  const canResize = () => agentPaneVisible() && (paneVisible != null
+    || window.matchMedia?.('(max-width: 767px)').matches || !paneAreaVisible.value)
 
   useEffect(() => {
     if (!host.current || !session) return undefined
-    const terminal = new Terminal({ fontFamily: terminalFont, fontSize: terminalFontSize.value, lineHeight: 1.25, fontWeight: 450, cursorBlink: session.status === 'running' && canType, disableStdin: session.status !== 'running' || !canType, scrollOnUserInput: true, convertEol: true, scrollback: 5_000, theme: terminalTheme(theme.value) })
+    const terminal = new Terminal({
+      fontFamily: terminalFont,
+      fontSize: terminalFontSize.value,
+      lineHeight: 1.25,
+      fontWeight: 450,
+      cursorBlink: session.status === 'running' && canType,
+      disableStdin: session.status !== 'running' || !canType,
+      scrollOnUserInput: true,
+      // Preserve the erased screen as scrollback during agent full redraws,
+      // as recommended upstream for ED2-heavy CLIs (xterm.js#5801).
+      scrollOnEraseInDisplay: true,
+      scrollback: 5_000,
+      theme: terminalTheme(theme.value)
+    })
     const fit = new FitAddon()
-    fitRef.current = fit
     terminal.loadAddon(fit)
     const search = new SearchAddon()
     searchRef.current = search
@@ -109,7 +125,7 @@ function AgentTerminalView({ session, onStatus, onReady, modifiersRef, foreign =
     terminalRef.current = terminal
     setTerminalInstance(terminal)
     const outputQueue = createTerminalOutputQueue(terminal)
-    attachTerminalKeys(terminal)
+    const stopKeys = attachTerminalKeys(terminal, { isModified: () => !!modifiersRef?.current })
     const stopTouchScroll = attachTerminalTouchScroll(host.current, terminal, () => terminalScrollSpeed.value)
     // The active agent tab should be immediately typeable after it is
     // restored; xterm otherwise waits for the first explicit click. Skip the
@@ -189,7 +205,8 @@ function AgentTerminalView({ session, onStatus, onReady, modifiersRef, foreign =
       // Watching someone else's PTY must not reflow it for the owner.
       if (foreign) return
       ws.request('agent', 'resize', { sessionId: session.sessionId, cols, rows }).catch(() => {})
-    })
+    }, canResize)
+    resizeRef.current = stopResizeWatcher
     // Tap-to-focus only: a scroll drag preventDefaults its touchmoves, which
     // suppresses the click — pointerdown focus would pop the keyboard
     // mid-gesture and break scrolling.
@@ -247,7 +264,7 @@ function AgentTerminalView({ session, onStatus, onReady, modifiersRef, foreign =
       requestAnimationFrame(() => {
         try {
           const rect = host.current?.getBoundingClientRect()
-          if (!rect || rect.width < 4 || rect.height < 4) return
+          if (!canResize() || !rect || rect.width < 4 || rect.height < 4) return
           fit.fit()
           if (event.detail?.open && wasAtLiveEdge) terminal.scrollToBottom()
           stopResizeWatcher.refresh?.()
@@ -303,6 +320,7 @@ function AgentTerminalView({ session, onStatus, onReady, modifiersRef, foreign =
       disposed = true
       stopResizeWatcher()
       stopTouchScroll()
+      stopKeys()
       host.current?.removeEventListener('click', focusTerminal)
       host.current?.removeEventListener('harpy:terminal-touch-consumed', consumeTouchGesture)
       clearTimeout(touchClickTimer)
@@ -316,7 +334,7 @@ function AgentTerminalView({ session, onStatus, onReady, modifiersRef, foreign =
       outputQueue.dispose()
       terminal.dispose()
       terminalRef.current = null
-      fitRef.current = null
+      resizeRef.current = null
       modifiersRef.current = false
       onReady?.(null)
     }
@@ -325,22 +343,12 @@ function AgentTerminalView({ session, onStatus, onReady, modifiersRef, foreign =
   useEffect(() => {
     if (!terminalRef.current) return
     terminalRef.current.options.theme = terminalTheme(theme.value)
-    requestAnimationFrame(() => {
-      try {
-        fitRef.current?.fit()
-        if (!foreign) ws.request('agent', 'resize', { sessionId: session?.sessionId, cols: terminalRef.current.cols, rows: terminalRef.current.rows }).catch(() => {})
-      } catch { /* terminal is switching */ }
-    })
+    resizeRef.current?.refresh?.()
   }, [theme.value, session?.sessionId])
   useEffect(() => {
     if (!terminalRef.current) return
     terminalRef.current.options.fontSize = terminalFontSize.value
-    requestAnimationFrame(() => {
-      try {
-        fitRef.current?.fit()
-        if (!foreign) ws.request('agent', 'resize', { sessionId: session?.sessionId, cols: terminalRef.current.cols, rows: terminalRef.current.rows }).catch(() => {})
-      } catch { /* terminal is switching */ }
-    })
+    resizeRef.current?.refresh?.()
   }, [terminalFontSize.value, session?.sessionId, foreign])
   useEffect(() => {
     if (!terminalRef.current) return

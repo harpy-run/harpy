@@ -12,7 +12,7 @@ import { recordActivity } from './activity.js'
 //   handoffs, AGENTS.md pointer). Off means Harpy leaves
 //   the workspace untouched — nothing is created, nothing is injected.
 // - `digest`: whether a finished session may also spend a small background
-//   CLI run distilling durable facts into MEMORY.md. On by default — the
+//   CLI run distilling durable facts into MEMORY.md. Opt-in — the
 //   user whose CLI ran the session pays the tokens, so the choice belongs
 //   to that same user.
 const DIGEST_TIMEOUT_MS = 120_000
@@ -73,7 +73,7 @@ function writeStore(store) {
 
 export function memoryPrefsFor(sub) {
   const record = readStore()[String(sub)] || {}
-  return { memory: record.memory !== false, digest: record.digest !== false }
+  return { memory: record.memory !== false, digest: record.digest === true }
 }
 
 export function memoryEnabledFor(sub) {
@@ -85,7 +85,7 @@ export function saveMemoryPrefs(sub, { memory, digest } = {}) {
   const record = { ...(store[String(sub)] || {}) }
   if (memory !== undefined) record.memory = !!memory
   if (digest !== undefined) record.digest = !!digest
-  if (record.memory === false || record.digest === false) store[String(sub)] = record
+  if (record.memory === false || record.digest === true) store[String(sub)] = record
   else delete store[String(sub)]
   writeStore(store)
   return memoryPrefsFor(sub)

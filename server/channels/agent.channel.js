@@ -4,7 +4,7 @@ import { httpError } from '../util/http.js'
 import { cliEnvInfo, saveCliEnv } from '../cli-env.js'
 import { ensureMemory, listHandoffs, readHandoff, removeMemoryEverywhere } from '../handoffs.js'
 import { memoryPrefsFor, saveMemoryPrefs } from '../memory.js'
-import { installSkillRepo, listSkills, removeSkill, skillsDirFor } from '../skills.js'
+import { installSkillRepo, listSkills, removeSkill, skillsDirFor, validateSkillOptions } from '../skills.js'
 import { workspaceRoot } from '../workspace.js'
 import { closeRunner, detachSubscriber, getHistory, inputRunner, listChangedFiles, listPresence, listSessions, resizeRunner, sendToRunner, startRunner, stopRunner, unwatchRunner, wakeRunner, watchRunner } from '../agents/runner.js'
 
@@ -12,11 +12,16 @@ import { closeRunner, detachSubscriber, getHistory, inputRunner, listChangedFile
 // into a home dir — with no private home that is the daemon's own
 // ~/.claude/skills, shared by every account, so it needs admin rights (or a
 // member who actually owns a private home).
-function skillsTarget(ctx, { scope, target, workspace }) {
+function skillsTarget(ctx, { agent, scope = 'user', for: target, workspace }) {
+  validateSkillOptions({ agent, scope })
+  if (target != null && (typeof target !== 'string' || !/^[\w][\w.-]{0,63}$/.test(target))) {
+    throw httpError(400, 'invalid skill target')
+  }
   const self = ctx?.principal?.sub || 'owner'
-  const sub = target ? String(target) : self
-  const access = requireSelfOrAdmin(ctx, target ? sub : null)
-  if (scope !== 'workspace' && !access.admin && !cliEnvInfo(sub).home) {
+  const sub = target || self
+  const access = requireSelfOrAdmin(ctx, target || null)
+  if (access.agents && !access.agents.has(agent)) throw httpError(403, 'agent is not assigned to this account')
+  if (scope === 'user' && !access.admin && !cliEnvInfo(sub).home) {
     throw httpError(403, 'user-scope skills require a private CLI home')
   }
   const base = scope === 'workspace' ? workspaceRoot(workspace, ctx) : ''
@@ -89,7 +94,7 @@ export const agentChannel = {
     },
     // Agent skill manager: installs SKILL.md collections from a git repo into
     // the agent's skills dir. `for` manages another user's private home
-    // (admin-only); `workspace` scope installs into .claude/skills inside the
+    // (admin-only); `workspace` scope installs into .agents/skills inside the
     // project — the same allowlist the fs ops use applies via workspaceRoot.
     skills: (ctx, params = {}) => {
       const { sub, base } = skillsTarget(ctx, params)

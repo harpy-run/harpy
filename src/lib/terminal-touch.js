@@ -1,11 +1,12 @@
 import { t } from './i18n.js'
+import { copyTerminalSelection } from './terminal-clipboard.js'
 
 // Native-feel touch scrolling for xterm. The rendered screen overlays the
 // scrollable viewport, so the browser's own pan can never reach it; instead
 // we own the gesture (touch-action:none) and drive the scroll ourselves:
 //
-//   normal buffer — move the viewport's scrollTop in pixels for smooth,
-//                   1:1 finger tracking plus release momentum;
+//   normal buffer — use xterm's public scroll APIs, carrying partial rows
+//                   between moves for finger tracking plus release momentum;
 //   alt-buffer / mouse-reporting TUI (devin, claude, vim, …) — the viewport
 //                   has nothing to scroll. When the app reports mouse mode
 //                   we forward real wheel events (xterm turns them into SGR
@@ -13,30 +14,48 @@ import { t } from './i18n.js'
 //                   arrow keys — the same thing xterm does for wheel input in
 //                   the alternate buffer.
 const DRAG_THRESHOLD_PX = 6
+// Finger drags need more travel than a mouse wheel at the same speed setting.
+// Keep the gain shared with release momentum, but not direct thumb positioning.
+const TOUCH_SCROLL_MULTIPLIER = 2
 const MOMENTUM_DECAY = 0.94
 const MOMENTUM_MIN_PX = 0.4
 const FRAME_MS = 16.7
 const LONG_PRESS_MS = 450
 
-const terminalViewport = (host) => host?.querySelector('.xterm-viewport')
 const terminalXterm = (host) => host?.querySelector('.xterm')
 const lineHeightPx = (terminal) => Math.max(8, (terminal?.options?.fontSize || 13) * (terminal?.options?.lineHeight || 1.25))
-const inMouseMode = (terminal) => terminal?.modes?.mouseTrackingMode !== 'none'
+const inMouseMode = (terminal) => !!terminal?.modes?.mouseTrackingMode && terminal.modes.mouseTrackingMode !== 'none'
 const inAltBuffer = (terminal) => terminal?.buffer?.active?.type === 'alternate'
+
+function dispatchWheel(host, deltaY, point) {
+  const screen = host?.querySelector('.xterm-screen')
+  const rect = screen?.getBoundingClientRect()
+  terminalXterm(host)?.dispatchEvent(new WheelEvent('wheel', {
+    deltaY,
+    deltaMode: 0,
+    // Mouse-reporting TUIs need coordinates inside their screen. Synthetic
+    // events default to (0, 0), which xterm rejects for an inset terminal.
+    clientX: point?.x ?? (rect ? rect.left + rect.width / 2 : 0),
+    clientY: point?.y ?? (rect ? rect.top + rect.height / 2 : 0),
+    bubbles: true,
+    cancelable: true
+  }))
+}
 
 const WORD_SEPARATORS = /[\s'"`()[\]{}<>|&;:=]/
 
 // Long-press word selection: converts the touch point into a buffer cell via
-// the render service's cell metrics, expands to word bounds on that line, and
+// the screen's cell geometry, expands to word bounds on that line, and
 // selects it. A copy chip then offers one-tap clipboard copy.
 function selectWordAt(terminal, host, clientX, clientY) {
-  const rows = host.querySelector('.xterm-rows')
-  const dims = terminal?._core?._renderService?.dimensions?.css?.cell
+  const screen = host.querySelector('.xterm-screen')
   const buffer = terminal?.buffer?.active
-  if (!rows || !dims?.width || !dims?.height || !buffer) return
-  const rect = rows.getBoundingClientRect()
-  const col = Math.floor((clientX - rect.left) / dims.width)
-  const vRow = Math.floor((clientY - rect.top) / dims.height)
+  if (!screen || !terminal.cols || !terminal.rows || !buffer) return
+  const rect = screen.getBoundingClientRect()
+  if (!rect.width || !rect.height) return
+  const col = Math.floor((clientX - rect.left) / (rect.width / terminal.cols))
+  const vRow = Math.floor((clientY - rect.top) / (rect.height / terminal.rows))
+  if (col < 0 || col >= terminal.cols || vRow < 0 || vRow >= terminal.rows) return
   const lineIdx = buffer.viewportY + vRow
   const line = buffer.getLine(lineIdx)
   if (!line || col < 0) return
@@ -83,17 +102,18 @@ function selectWordAt(terminal, host, clientX, clientY) {
 export function scrollTerminalLines(host, terminal, lines) {
   const px = lines * lineHeightPx(terminal)
   if (inMouseMode(terminal)) {
-    terminalXterm(host)?.dispatchEvent(new WheelEvent('wheel', { deltaY: px, deltaMode: 0, bubbles: true, cancelable: true }))
+    dispatchWheel(host, px)
   } else if (inAltBuffer(terminal)) {
     const seq = lines > 0 ? '\x1b[B' : '\x1b[A'
     for (let i = 0; i < Math.abs(Math.round(lines)); i++) terminal?.input(seq, false)
   } else {
-    terminalViewport(host)?.scrollBy({ top: px, behavior: 'smooth' })
+    terminal?.scrollLines(Math.round(lines))
   }
 }
 
 export function attachTerminalTouchScroll(host, terminal, getSpeed = () => 1) {
   if (!host) return () => {}
+  const touchSpeed = () => (Number(getSpeed()) || 1) * TOUCH_SCROLL_MULTIPLIER
 
   let startY = 0
   let lastY = 0
@@ -104,6 +124,8 @@ export function attachTerminalTouchScroll(host, terminal, getSpeed = () => 1) {
   let momentumFrame = 0
   let longPressTimer = 0
   let longPressPoint = null
+  let scrollPoint = null
+  let scrollRemainder = 0
 
   // Mouse-reporting apps get real wheel events; other alt-buffer TUIs get
   // arrow keys — xterm only listens to wheel while mouse mode is active, so
@@ -114,10 +136,6 @@ export function attachTerminalTouchScroll(host, terminal, getSpeed = () => 1) {
   const cancelMomentum = () => {
     if (momentumFrame) cancelAnimationFrame(momentumFrame)
     momentumFrame = 0
-  }
-
-  const wheel = (deltaY) => {
-    terminalXterm(host)?.dispatchEvent(new WheelEvent('wheel', { deltaY, deltaMode: 0, bubbles: true, cancelable: true }))
   }
 
   // Carry of partial-line drags so a slow finger still accumulates whole
@@ -136,9 +154,18 @@ export function attachTerminalTouchScroll(host, terminal, getSpeed = () => 1) {
   }
 
   const apply = (delta) => {
-    if (viaMouse()) wheel(delta)
+    if (viaMouse()) dispatchWheel(host, delta, scrollPoint)
     else if (viaArrows()) arrows(delta)
-    else { const vp = terminalViewport(host); if (vp) vp.scrollTop += delta }
+    else {
+      // xterm 6 owns a virtual scrollbar rather than a DOM scrollTop. Going
+      // through its API also records that the reader left the live edge.
+      scrollRemainder += delta / lineHeightPx(terminal)
+      const lines = Math.trunc(scrollRemainder)
+      if (lines) {
+        terminal.scrollLines(lines)
+        scrollRemainder -= lines
+      }
+    }
   }
 
   const onStart = (event) => {
@@ -151,8 +178,10 @@ export function attachTerminalTouchScroll(host, terminal, getSpeed = () => 1) {
     lastT = performance.now()
     velocity = 0
     arrowRemainder = 0
+    scrollRemainder = 0
     scrolling = false
     longPressPoint = { x: event.touches[0].clientX, y: event.touches[0].clientY }
+    scrollPoint = longPressPoint
     longPressTimer = setTimeout(() => {
       if (longPressPoint && !scrolling) {
         selectWordAt(terminal, host, longPressPoint.x, longPressPoint.y)
@@ -165,6 +194,7 @@ export function attachTerminalTouchScroll(host, terminal, getSpeed = () => 1) {
   const onMove = (event) => {
     if (!target || event.touches.length !== 1) return
     const y = event.touches[0].pageY
+    scrollPoint = { x: event.touches[0].clientX, y: event.touches[0].clientY }
     const now = performance.now()
     if (!scrolling && Math.abs(y - startY) < DRAG_THRESHOLD_PX) { lastY = y; lastT = now; return }
     scrolling = true
@@ -187,7 +217,7 @@ export function attachTerminalTouchScroll(host, terminal, getSpeed = () => 1) {
     // Exponential moving average of recent drag speed feeds the release
     // momentum; a slow careful drag barely moves after the finger lifts.
     if (dt > 0) velocity = velocity * 0.6 + (delta / dt) * 0.4
-    apply(delta * (Number(getSpeed()) || 1))
+    apply(delta * touchSpeed())
   }
 
   const momentum = () => {
@@ -195,18 +225,9 @@ export function attachTerminalTouchScroll(host, terminal, getSpeed = () => 1) {
     if (!target) return
     velocity *= MOMENTUM_DECAY
     const step = velocity * FRAME_MS
-    if (Math.abs(step) < MOMENTUM_MIN_PX) { target = null; snapIfNearBottom(); return }
-    apply(step * (Number(getSpeed()) || 1))
+    if (Math.abs(step) < MOMENTUM_MIN_PX) { target = null; return }
+    apply(step * touchSpeed())
     momentumFrame = requestAnimationFrame(momentum)
-  }
-
-  // Within ~3 rows of the bottom the user is at the live edge, not reading
-  // scrollback — glue them back so output never lands just out of view.
-  const snapIfNearBottom = () => {
-    const vp = terminalViewport(host)
-    if (!vp) return
-    const gap = vp.scrollHeight - vp.clientHeight - vp.scrollTop
-    if (gap > 0 && gap < lineHeightPx(terminal) * 3) vp.scrollTop = vp.scrollHeight
   }
 
   const onEnd = (event) => {
@@ -217,10 +238,6 @@ export function attachTerminalTouchScroll(host, terminal, getSpeed = () => 1) {
     if (scrolling && Math.abs(velocity * FRAME_MS) >= MOMENTUM_MIN_PX) momentumFrame = requestAnimationFrame(momentum)
     else target = null
     scrolling = false
-    // A tap's 6px wobble can leave the viewport parked a few px above the
-    // bottom — then the next TUI paint (option screens, prompts) renders
-    // below the fold and looks like the screen vanished. Near-bottom snaps.
-    snapIfNearBottom()
   }
 
   host.addEventListener('touchstart', onStart, { capture: true, passive: true })
@@ -252,7 +269,7 @@ export function attachTerminalTouchScroll(host, terminal, getSpeed = () => 1) {
   }
 }
 
-function attachScrollbar(host, _terminal) {
+function attachScrollbar(host, terminal) {
   const track = document.createElement('div')
   track.className = 'terminal-scrollbar'
   const thumb = document.createElement('div')
@@ -260,30 +277,29 @@ function attachScrollbar(host, _terminal) {
   track.appendChild(thumb)
   host.appendChild(track)
 
-  const viewport = () => terminalViewport(host)
   const update = () => {
-    const vp = viewport()
-    if (!vp || vp.scrollHeight <= vp.clientHeight + 2) {
+    const buffer = terminal.buffer.active
+    if (buffer.type === 'alternate' || buffer.baseY <= 0) {
       track.classList.add('hidden')
       return
     }
     track.classList.remove('hidden')
     const trackH = track.clientHeight
-    const thumbH = Math.max(28, trackH * (vp.clientHeight / vp.scrollHeight))
-    const top = (trackH - thumbH) * (vp.scrollTop / Math.max(1, vp.scrollHeight - vp.clientHeight))
+    const thumbH = Math.min(trackH, Math.max(28, trackH * terminal.rows / (buffer.baseY + terminal.rows)))
+    const top = (trackH - thumbH) * (buffer.viewportY / buffer.baseY)
     thumb.style.height = `${thumbH}px`
     thumb.style.transform = `translateY(${top}px)`
   }
 
   let dragging = false
   const positionToScroll = (clientY) => {
-    const vp = viewport()
-    if (!vp) return
+    const buffer = terminal.buffer.active
+    if (buffer.type === 'alternate' || buffer.baseY <= 0) return
     const rect = track.getBoundingClientRect()
     const thumbH = thumb.clientHeight
     const y = clientY - rect.top - thumbH / 2
     const ratio = Math.min(1, Math.max(0, y / Math.max(1, rect.height - thumbH)))
-    vp.scrollTop = ratio * (vp.scrollHeight - vp.clientHeight)
+    terminal.scrollToLine(Math.round(ratio * buffer.baseY))
   }
   const onTouchStart = (event) => {
     event.preventDefault()
@@ -311,19 +327,20 @@ function attachScrollbar(host, _terminal) {
   track.addEventListener('touchend', onTouchEnd, { passive: true })
   track.addEventListener('touchcancel', onTouchEnd, { passive: true })
 
-  const vp = viewport()
-  vp?.addEventListener('scroll', update, { passive: true })
-  const observer = new ResizeObserver(update)
-  if (vp) observer.observe(vp)
-  // The scrollable content grows without firing scroll events when the user
-  // is parked mid-scrollback — watching it keeps the thumb size honest.
-  if (vp?.firstElementChild) observer.observe(vp.firstElementChild)
-  observer.observe(host)
+  const scrollListener = terminal.onScroll(update)
+  const parsedListener = terminal.onWriteParsed(update)
+  const resizeListener = terminal.onResize(update)
+  const bufferListener = terminal.buffer.onBufferChange(update)
+  const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(update) : null
+  observer?.observe(host)
   update()
 
   return () => {
-    observer.disconnect()
-    vp?.removeEventListener('scroll', update)
+    observer?.disconnect()
+    scrollListener.dispose()
+    parsedListener.dispose()
+    resizeListener.dispose()
+    bufferListener.dispose()
     track.remove()
   }
 }
@@ -342,10 +359,7 @@ function attachCopyChip(host, terminal) {
   const copy = (event) => {
     event.preventDefault()
     event.stopPropagation()
-    if (terminal.hasSelection()) {
-      navigator.clipboard?.writeText(terminal.getSelection()).catch(() => {})
-      terminal.clearSelection()
-    }
+    if (terminal.hasSelection()) copyTerminalSelection(terminal)
     sync()
   }
   chip.addEventListener('click', copy)

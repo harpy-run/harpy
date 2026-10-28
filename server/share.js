@@ -10,6 +10,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { config, VERSION } from './config.js';
@@ -178,8 +179,95 @@ function keyFingerprint() {
  *             whole match is the public URL; url — URL known upfront.
  */
 const boreRuntimeFile = () => path.join(os.homedir(), '.bore', 'runtime.json');
+
+// Scan to the end of the first complete JSON document. Multiple bore daemons
+// write runtime.json without coordination — the observed corruption is a
+// valid document with a fragment appended (`}6.666Z",…}`), which otherwise
+// reads as unreadable forever.
+function firstJsonDocument(raw) {
+    let depth = 0, inStr = false, esc = false;
+    for (let i = 0; i < raw.length; i++) {
+        const c = raw[i];
+        if (inStr) {
+            if (esc) esc = false;
+            else if (c === '\\') esc = true;
+            else if (c === '"') inStr = false;
+            continue;
+        }
+        if (c === '"') { inStr = true; continue; }
+        if (c === '{' || c === '[') depth++;
+        else if (c === '}' || c === ']') { if (--depth === 0) return raw.slice(0, i + 1); }
+    }
+    return null;
+}
+
 function boreRuntime() {
-    try { return JSON.parse(fs.readFileSync(boreRuntimeFile(), 'utf8')); } catch { return null; }
+    let raw;
+    try { raw = fs.readFileSync(boreRuntimeFile(), 'utf8'); } catch { return null; }
+    try { return JSON.parse(raw); } catch { /* corrupted — heal below */ }
+    // Salvage the first complete document and rewrite it cleanly. If nothing
+    // parses, quarantine the file: bore regenerates it on next daemon start,
+    // while a permanently unreadable runtime means every `bore up` spawns a
+    // NEW daemon it can't see → unbounded stray pileup.
+    try {
+        const doc = firstJsonDocument(raw);
+        const parsed = doc && JSON.parse(doc);
+        if (parsed && typeof parsed === 'object') {
+            fs.writeFileSync(boreRuntimeFile(), JSON.stringify(parsed, null, 2), { mode: 0o600 });
+            log('healed corrupt bore runtime.json (trailing fragment dropped)');
+            return parsed;
+        }
+    } catch { /* fall through to quarantine */ }
+    try {
+        fs.renameSync(boreRuntimeFile(), `${boreRuntimeFile()}.corrupt-${Date.now()}`);
+        log('quarantined unreadable bore runtime.json');
+    } catch { /* gone already */ }
+    return null;
+}
+
+/**
+ * The subdomain this daemon owns on the edge: the active bore tunnel for our
+ * own port, falling back to whatever public URL we already published.
+ */
+function boreOwnedSubdomain(port) {
+    const active = (boreRuntime()?.tunnels || []).find((t) => t.localPort === Number(port));
+    if (active?.subdomain) return active.subdomain;
+    try { return new URL(readState()?.url).hostname.split('.')[0] || null; } catch { return null; }
+}
+
+// bore's daemon re-publishes `desiredTunnels` to the edge on every sync, so a
+// leftover entry keeps re-registering its local port for a subdomain another
+// tunnel already owns. Two registrations for one hostname means the edge can
+// route to the dead one: plain requests land on the live backend (the app
+// "works") while a WebSocket handshake hitting the dead backend is refused
+// outright — the exact "works here, WebSocket failed there" split.
+//
+// Drop entries whose port is not ours. A port that is not even LISTENing is
+// unambiguously stale; a live-but-foreign port is only dropped when it shares
+// our subdomain, which the edge cannot serve to two backends anyway.
+export function pruneConflictingBoreTunnels(port, subdomain) {
+    if (!subdomain) return;
+    let cfg;
+    try { cfg = JSON.parse(fs.readFileSync(boreConfigFile(), 'utf8')); } catch { return; }
+    const desired = Array.isArray(cfg.desiredTunnels) ? cfg.desiredTunnels : null;
+    if (!desired) return;
+    const kept = desired.filter((t) => {
+        if (t.preferredSubdomain !== subdomain || Number(t.localPort) === Number(port)) return true;
+        let listening = false;
+        try {
+            const probe = net.connect({ host: '127.0.0.1', port: Number(t.localPort) });
+            probe.on('connect', () => { listening = true; probe.destroy(); });
+            probe.on('error', () => probe.destroy());
+        } catch { /* not connectable */ }
+        if (listening) return true;
+        log(`pruned stale bore tunnel ${subdomain}.bore.dk -> :${t.localPort} (not listening)`);
+        return false;
+    });
+    if (kept.length === desired.length) return;
+    cfg.desiredTunnels = kept;
+    try {
+        fs.writeFileSync(boreConfigFile(), JSON.stringify(cfg, null, 2), { mode: 0o600 });
+    } catch (e) { log(`could not prune bore config: ${e.message}`); }
 }
 
 const PROVIDERS = {
@@ -199,14 +287,27 @@ const PROVIDERS = {
             const bin = await ensureBinary('bore',
                 `https://bore.dk/downloads/latest/bore-${plat}-${arch}${exeExt}`);
             if (!boreSignedIn()) throw new Error('bore.dk sign-in required first');
+            // Clear any stale registration for our own subdomain BEFORE
+            // claiming it — otherwise bore re-publishes the dead backend and
+            // the edge splits incoming connections across the two.
+            pruneConflictingBoreTunnels(port, boreOwnedSubdomain(port));
             return { cmd: bin, args: ['up', String(port)], urlRe: /https:\/\/[\w.-]+\.bore\.dk/, input: 'y\n' };
         },
         resolve({ port }) {
             const rt = boreRuntime();
             const active = (rt?.tunnels || []).filter((t) => t.status === 'active');
-            const tun = active.find((t) => t.localPort === Number(port)) || active[0];
-            if (!tun || !rt?.daemonPid) return { pid: null, url: null };
-            return { pid: rt.daemonPid, url: tun.publicUrl || null };
+            // Match by port ONLY. The old `|| active[0]` fallback adopted
+            // whatever tunnel happened to be listed first — a different
+            // backend entirely (or a dead one), so harpy would advertise a
+            // public URL that is not this daemon. That is the ":3199
+            // incident" in shareProbe: the URL was healthy-shaped but routed
+            // somewhere else.
+            const tun = active.find((t) => t.localPort === Number(port));
+            // Newer bore builds renamed the field to `guiPid` — accept both or
+            // the pid never resolves and the supervisor respawns forever.
+            const daemonPid = rt?.daemonPid ?? rt?.guiPid;
+            if (!tun || !daemonPid) return { pid: null, url: null };
+            return { pid: daemonPid, url: tun.publicUrl || null };
         },
         async stop({ port }) {
             try {
@@ -357,11 +458,18 @@ export async function shareEnable(provider, opts = {}, { port = config.port } = 
         // `input` feeds stdin: bore's "reuse reserved namespace?" prompt would
         // otherwise hang the detached CLI until the timeout kills it, and the
         // supervisor's retry then spawns yet another bore daemon (flap loop).
+        const daemonsBefore = providerDaemonPids(provider);
         const res = spawnSync(spec.cmd, spec.args, { encoding: 'utf8', timeout: 30000, input: spec.input || '' });
         const out = `${res.stdout || ''}${res.stderr || ''}`;
         fs.appendFileSync(tunnelLog(), out);
-        if (res.error) throw new Error(`${provider} failed: ${res.error.message}`);
-        if (res.status !== 0) throw new Error(`${provider} exited ${res.status}: ${out.trim().slice(-300)}`);
+        if (res.error) {
+            reapSpawnedDaemons(provider, daemonsBefore);
+            throw new Error(`${provider} failed: ${res.error.message}`);
+        }
+        if (res.status !== 0) {
+            reapSpawnedDaemons(provider, daemonsBefore);
+            throw new Error(`${provider} exited ${res.status}: ${out.trim().slice(-300)}`);
+        }
         let resolved = (await p.resolve?.({ port })) || {};
         if (!resolved.pid) {
             await new Promise((r) => setTimeout(r, 800));
@@ -369,7 +477,16 @@ export async function shareEnable(provider, opts = {}, { port = config.port } = 
         }
         url = resolved.url || out.match(spec.urlRe)?.[0] || null;
         pid = resolved.pid || null;
-        if (!url) throw new Error(`${provider} did not report a public URL`);
+        if (!pid) {
+            // resolve() needs a runtime.json the daemon may not have written
+            // yet — if exactly one provider daemon exists, it's ours.
+            const pids = [...providerDaemonPids(provider)];
+            if (pids.length === 1) pid = pids[0];
+        }
+        if (!url) {
+            reapSpawnedDaemons(provider, daemonsBefore);
+            throw new Error(`${provider} did not report a public URL`);
+        }
         sweepStrayProviderDaemons(provider, pid);
     } else {
         const child = spawn(spec.cmd, spec.args, { detached: true, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
@@ -440,6 +557,37 @@ function livePid(st) {
     return null;
 }
 
+// Providers whose CLI leaves a long-lived singleton daemon behind (bore's
+// `daemon start`): matched by cmdline fragment for pgrep -f.
+const PROVIDER_DAEMON_PATTERNS = { bore: 'bore daemon' };
+
+function providerDaemonPids(provider) {
+    const pattern = PROVIDER_DAEMON_PATTERNS[provider];
+    if (!pattern || process.platform === 'win32') return new Set();
+    let out = '';
+    try { out = execFileSync('pgrep', ['-f', pattern], { encoding: 'utf8' }); }
+    catch { return new Set(); }
+    return new Set(out.split('\n')
+        .map((line) => Number(line.trim()))
+        .filter((pid) => pid && pid !== process.pid));
+}
+
+/**
+ * `bore up` auto-starts a `bore daemon` before it can fail — a timed-out or
+ * non-zero exit leaves that daemon orphaned, and the supervisor's next retry
+ * spawns another: the unbounded stray pileup. A failed attempt owns every
+ * daemon that appeared during it, so reap exactly that delta. Fresh spawns
+ * get SIGKILL — they hold no tunnel state worth a graceful shutdown, and
+ * Go daemons wedged on a dead edge have ignored SIGTERM in the field.
+ */
+function reapSpawnedDaemons(provider, beforePids) {
+    for (const pid of providerDaemonPids(provider)) {
+        if (beforePids.has(pid)) continue;
+        try { process.kill(pid, 'SIGKILL'); log(`reaped ${provider} daemon pid ${pid} left by failed attempt`); }
+        catch { /* already gone */ }
+    }
+}
+
 /**
  * Singleton-daemon providers (bore) can end up with TWO daemon processes: a
  * supervisor respawn races an orphaned `bore daemon`, both register the same
@@ -449,14 +597,20 @@ function livePid(st) {
  */
 function sweepStrayProviderDaemons(provider, keepPid) {
     if (provider !== 'bore' || !keepPid || process.platform === 'win32') return;
-    let out = '';
-    try { out = execFileSync('pgrep', ['-f', 'bore daemon'], { encoding: 'utf8' }); }
-    catch { return; }
-    for (const line of out.split('\n')) {
-        const pid = Number(line.trim());
-        if (!pid || pid === keepPid || pid === process.pid) continue;
+    for (const pid of providerDaemonPids(provider)) {
+        if (pid === keepPid) continue;
         try { process.kill(pid, 'SIGTERM'); log(`killed stray ${provider} daemon pid ${pid}`); }
-        catch { /* not ours to kill — ignore */ }
+        catch { /* not ours to kill — ignore */ continue; }
+        // Wedged bore daemons have survived SIGTERM in the field — escalate
+        // shortly, but only if the pid still runs bore (no pid-reuse kill).
+        const timer = setTimeout(() => {
+            try {
+                if (fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes('bore')) {
+                    process.kill(pid, 'SIGKILL');
+                }
+            } catch { /* reaped or replaced by an unrelated process */ }
+        }, 2000);
+        timer.unref?.();
     }
 }
 
@@ -464,7 +618,11 @@ async function shareDisableInternal() {
     const st = readState();
     if (!st) return;
     const p = PROVIDERS[st.provider];
+    // `bore down` auto-starts the daemon just to talk to it — the fresh daemon
+    // outlives the request, so reap the delta alongside the recorded pid.
+    const daemonsBefore = providerDaemonPids(st.provider);
     if (p?.stop) { try { await p.stop({ port: config.port }); } catch { /* best effort */ } }
+    reapSpawnedDaemons(st.provider, daemonsBefore);
     if (st?.pid && pidAlive(st.pid)) {
         killProcessTree(st.pid);
     }
